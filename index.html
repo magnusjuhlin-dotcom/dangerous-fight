@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dangerous Fight - Slingshot Arena</title>
+    <!-- Google Fonts for futuristic cyberpunk aesthetic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+    <!-- Load PeerJS for WebRTC multiplayer -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <!-- The HTML5 Canvas for high-performance 60FPS neon rendering -->
+        <canvas id="game-canvas"></canvas>
+
+        <!-- Dynamic HUD (Heads-Up Display) -->
+        <div id="hud" class="hud-panel hidden">
+            <!-- Boss Warning Banner -->
+            <div id="boss-warning" class="boss-warning-banner hidden">VARNING: SVÅR BOSS KOMMER! 💀</div>
+
+            <!-- Top Tower Stats (Enemy / Player 2) -->
+            <div class="hud-top-tower">
+                <div class="label text-red" id="top-tower-label">MOTSTÅNDARENS TORN</div>
+                <div class="bar-container hp-container red-glow">
+                    <div id="top-tower-hp-bar" class="bar hp-bar enemy" style="width: 100%;"></div>
+                </div>
+            </div>
+
+            <!-- Bottom Tower Stats (Player 1) -->
+            <div class="hud-bottom-tower">
+                <div class="label text-cyan" id="bottom-tower-label">DITT TORN</div>
+                <div class="bar-container hp-container cyan-glow">
+                    <div id="bottom-tower-hp-bar" class="bar hp-bar" style="width: 100%;"></div>
+                </div>
+            </div>
+
+            <!-- Cars Health & Energy Overlay -->
+            <div class="car-status-container">
+                <div class="car-stat-box bottom-car-stat">
+                    <div class="mini-label">BIL-HP: <span id="player-car-hp-text">100</span></div>
+                    <div id="player-car-charge" class="charge-lights">
+                        <div class="light"></div>
+                        <div class="light"></div>
+                        <div class="light"></div>
+                    </div>
+                </div>
+                <div class="car-stat-box top-car-stat">
+                    <div class="mini-label">FIENDE-HP: <span id="enemy-car-hp-text">100</span></div>
+                </div>
+            </div>
+
+            <!-- Contextual Touch Helper for Mobile -->
+            <div class="touch-hint">Dra på din bil för att skjuta iväg den | Ladda i din zon längst ner</div>
+            
+            <!-- Floating shoot button for bottom player -->
+            <button id="shoot-btn" class="btn-shoot neon-btn-cyan">SKJUT ⚡</button>
+        </div>
+
+        <!-- MAIN MENU OVERLAY -->
+        <div id="main-menu" class="overlay-screen active">
+            <div class="glitch-title" data-text="DANGEROUS FIGHT">DANGEROUS FIGHT</div>
+            <div class="subtitle">SLINGSHOT ARENA</div>
+
+            <div class="menu-buttons">
+                <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
+                <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
+                <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">BIL-GARAGE</button>
+                <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">KANON-BUTIK</button>
+                <button id="btn-upgrades" class="btn btn-secondary neon-btn-green">UPPGRADERINGAR</button>
+            </div>
+            
+            <div class="high-score-display">HÖGSTA VÅG: <span id="highest-wave-val">1</span></div>
+        </div>
+
+        <!-- MULTIPLAYER JOIN / HOST OVERLAY -->
+        <div id="multiplayer-menu" class="overlay-screen hidden">
+            <h2>SPELA ONLINE</h2>
+            <p class="section-desc">Anslut till en kompis via WebRTC</p>
+
+            <div class="menu-buttons">
+                <button id="btn-create-room" class="btn btn-primary neon-btn-cyan">SKAPA NYTT RUM</button>
+                <button id="btn-join-room-menu" class="btn btn-secondary neon-btn-pink">ANSLUT TILL RUM</button>
+                <button id="btn-multi-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+            </div>
+        </div>
+
+        <!-- CREATE ROOM LOBBY OVERLAY -->
+        <div id="lobby-screen" class="overlay-screen hidden">
+            <h2>RUM SKAPAT</h2>
+            <p class="section-desc">Dela denna kod med din motståndare:</p>
+            <div class="room-code-display" id="lobby-code-val">----</div>
+            <div class="lobby-status">Väntar på att Spelare 2 ansluter...</div>
+            <button id="btn-lobby-back" class="btn btn-secondary back-btn">AVBRYT</button>
+        </div>
+
+        <!-- JOIN ROOM INPUT OVERLAY -->
+        <div id="join-room-screen" class="overlay-screen hidden">
+            <h2>ANSLUT TILL RUM</h2>
+            <p class="section-desc">Mata in den 4-siffriga rums-koden:</p>
+            <input type="text" id="input-room-code" maxlength="4" placeholder="KOD" autocomplete="off" class="neon-input">
+            <button id="btn-connect-peer" class="btn btn-primary neon-btn-pink">ANSLUT</button>
+            <div id="join-status-text" class="status-msg"></div>
+            <button id="btn-join-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- VEHICLE GARAGE (FORMER WEAPON ARSENAL) -->
+        <div id="weapons-menu" class="overlay-screen hidden">
+            <h2>BIL-GARAGE</h2>
+            <p class="section-desc">Välj din spelpjäs. Lås upp med Cyber-Credits ⚡</p>
+            
+            <div class="weapons-grid">
+                <!-- Cyber Car -->
+                <div class="weapon-card selected" id="wpn-katana" data-weapon="katana">
+                    <div class="weapon-glow cyan"></div>
+                    <h3>CYBER CAR (Standard)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">HP / Vikt: <span>Medel</span></div>
+                        <div class="stat-row">Ramm-Skada: <span>100</span></div>
+                        <div class="stat-row">Fart: <span>Medel</span></div>
+                    </div>
+                    <div class="weapon-cost">UPPLÅST</div>
+                </div>
+
+                <!-- Plasma Truck -->
+                <div class="weapon-card locked" id="wpn-blades" data-weapon="blades">
+                    <div class="weapon-glow pink"></div>
+                    <h3>PLASMA TRUCK (Tung)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">HP / Vikt: <span>Hög (Trögstyrd)</span></div>
+                        <div class="stat-row">Ramm-Skada: <span>180</span></div>
+                        <div class="stat-row">Fart: <span>Långsam</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 100</div>
+                </div>
+
+                <!-- Laser Cycle -->
+                <div class="weapon-card locked" id="wpn-hammer" data-weapon="hammer">
+                    <div class="weapon-glow orange"></div>
+                    <h3>LASER CYCLE (Snabb)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">HP / Vikt: <span>Låg (Mycket lätt)</span></div>
+                        <div class="stat-row">Ramm-Skada: <span>70</span></div>
+                        <div class="stat-row">Fart: <span>Extrem</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 250</div>
+                </div>
+            </div>
+
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-weapons-val">0</span> ⚡</div>
+            <button id="btn-weapons-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- CANNON SHOP OVERLAY -->
+        <div id="cannons-menu" class="overlay-screen hidden">
+            <h2>LASERKANON-BUTIK</h2>
+            <p class="section-desc">Köp och utrusta olika laserkanoner till din bil. Lås upp med Credits ⚡</p>
+            
+            <div class="weapons-grid">
+                <!-- Puls Laser -->
+                <div class="weapon-card selected" id="cnn-laser" data-cannon="laser">
+                    <div class="weapon-glow cyan"></div>
+                    <h3>PULS-LASER (Standard)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>25 / 50</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Hög</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Standard (8px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>Enkel laserpuls</span></div>
+                    </div>
+                    <div class="weapon-cost">UPPLÅST</div>
+                </div>
+
+                <!-- Mega Laser -->
+                <div class="weapon-card locked" id="cnn-plasma" data-cannon="plasma">
+                    <div class="weapon-glow pink"></div>
+                    <h3>MEGA-LASER (Tung)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>50 / 110</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Långsam</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Stor (16px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>Tung laserladdning</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 150</div>
+                </div>
+
+                <!-- Dubbel Laser -->
+                <div class="weapon-card locked" id="cnn-rapid" data-cannon="rapid">
+                    <div class="weapon-glow green"></div>
+                    <h3>DUBBEL-LASER (Dubbelskott)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>15 / 30 per skott</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Mycket snabb</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Mindre (6px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>Två parallella laserstrålar</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 200</div>
+                </div>
+
+                <!-- Trio Laser -->
+                <div class="weapon-card locked" id="cnn-trio" data-cannon="trio">
+                    <div class="weapon-glow orange"></div>
+                    <h3>TRIO-LASER (Spridning)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>15 / 30 per skott</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Medel</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Liten (7px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>Tredelad laserstråle</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 300</div>
+                </div>
+
+                <!-- Hagel Laser -->
+                <div class="weapon-card locked" id="cnn-hagel" data-cannon="hagel">
+                    <div class="weapon-glow cyan"></div>
+                    <h3>HAGEL-LASER (Sprideld)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>10 / 20 per skott</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Snabb</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Liten (5px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>5 strålar bred spridning</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 350</div>
+                </div>
+
+                <!-- Sniper Laser -->
+                <div class="weapon-card locked" id="cnn-sniper" data-cannon="sniper">
+                    <div class="weapon-glow pink"></div>
+                    <h3>SNIPER-LASER (Precisions)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>80 / 160</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Extremt snabb</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Smal (4px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>En kraftfull precisionsstråle</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 450</div>
+                </div>
+
+                <!-- Bakåt Laser -->
+                <div class="weapon-card locked" id="cnn-bakåt" data-cannon="bakåt">
+                    <div class="weapon-glow green"></div>
+                    <h3>BAKÅT-LASER (Dubbelriktad)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">Skada Bil / Torn: <span>20 / 40 per skott</span></div>
+                        <div class="stat-row">Skotthastighet: <span>Hög</span></div>
+                        <div class="stat-row">Skottstorlek: <span>Standard (8px)</span></div>
+                        <div class="stat-row">Skottmönster: <span>Skjuter uppåt OCH nedåt</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 500</div>
+                </div>
+            </div>
+
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-cannons-val">0</span> ⚡</div>
+            <button id="btn-cannons-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- PERSISTENT UPGRADES OVERLAY -->
+        <div id="upgrades-menu" class="overlay-screen hidden">
+            <h2>UPPGRADERINGAR</h2>
+            <p class="section-desc">Förbättra dina grundläggande system permanent inför striderna.</p>
+
+            <div class="upgrades-list">
+                <!-- Upgrade Tower Health -->
+                <div class="upgrade-row" id="upg-health">
+                    <div class="upgrade-info">
+                        <h3>Torn-Pansar (Max HP)</h3>
+                        <p>Ökar ditt torns hälsa så det tål mer stryk (+50 HP/nivå).</p>
+                    </div>
+                    <div class="upgrade-control">
+                        <span class="upgrade-level">Nivå 0/5</span>
+                        <button class="btn btn-upgrade neon-btn-cyan" data-upgrade="health">Köp ⚡ <span class="cost-val">30</span></button>
+                    </div>
+                </div>
+
+                <!-- Upgrade Battery Charger -->
+                <div class="upgrade-row" id="upg-posture">
+                    <div class="upgrade-info">
+                        <h3>Snabbladdning (Energi)</h3>
+                        <p>Laddar upp skott snabbare när bilen står i laddningszonen (+15%/nivå).</p>
+                    </div>
+                    <div class="upgrade-control">
+                        <span class="upgrade-level">Nivå 0/5</span>
+                        <button class="btn btn-upgrade neon-btn-pink" data-upgrade="posture">Köp ⚡ <span class="cost-val">40</span></button>
+                    </div>
+                </div>
+
+                <!-- Upgrade Credits -->
+                <div class="upgrade-row" id="upg-credits">
+                    <div class="upgrade-info">
+                        <h3>Kredit-Hack (Bonus)</h3>
+                        <p>Få fler Cyber-Credits per besegrad motståndare (+20%/nivå).</p>
+                    </div>
+                    <div class="upgrade-control">
+                        <span class="upgrade-level">Nivå 0/5</span>
+                        <button class="btn btn-upgrade neon-btn-orange" data-upgrade="credits">Köp ⚡ <span class="cost-val">50</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-upgrades-val">0</span> ⚡</div>
+            <button id="btn-upgrades-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- GAME OVER / DEFEAT OVERLAY -->
+        <div id="game-over-screen" class="overlay-screen hidden">
+            <h1 class="neon-text-red glitch-title" data-text="SYSTEM DEFEAT">STRID FÖRLORAD</h1>
+            <p class="subtitle red">Ditt torn förstördes.</p>
+
+            <div class="run-stats">
+                <div class="stat-item">Vinnare: <span id="stat-defeat-winner" class="neon-text-red">Motståndaren</span></div>
+                <div class="stat-item">Intjänade Credits: ⚡ <span id="stat-credits-earned">0</span></div>
+            </div>
+
+            <div class="menu-buttons">
+                <button id="btn-restart" class="btn btn-primary neon-btn-cyan">SPELA IGEN</button>
+                <button id="btn-gameover-menu" class="btn btn-secondary neon-btn-pink">HUVUDMENY</button>
+            </div>
+        </div>
+
+        <!-- GAME VICTORY / VICTORY OVERLAY -->
+        <div id="victory-screen" class="overlay-screen hidden">
+            <h1 class="neon-text-green glitch-title" data-text="SYSTEM VICTORY">STRID VUNNEN!</h1>
+            <p class="subtitle green">Du förstörde motståndarens torn.</p>
+
+            <div class="run-stats">
+                <div class="stat-item">Vinnare: <span class="neon-text-green">Du</span></div>
+                <div class="stat-item">Intjänade Credits: ⚡ <span id="stat-victory-credits">0</span></div>
+            </div>
+
+            <div class="menu-buttons">
+                <button id="btn-victory-restart" class="btn btn-primary neon-btn-cyan">SPELA IGEN</button>
+                <button id="btn-victory-menu" class="btn btn-secondary neon-btn-pink">HUVUDMENY</button>
+            </div>
+        </div>
+    </div>
+    <!-- Core Game Scripts loaded as ES6 modules -->
+    <script src="src/bundle.js?v=2"></script>
+</body>
+</html>
