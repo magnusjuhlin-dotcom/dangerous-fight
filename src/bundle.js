@@ -713,6 +713,22 @@ class CanvasController {
         this.flashTime = 0;
         this.flashMaxTime = 0;
         this.flashColor = '#ffffff';
+        this.floorPulses = [];
+
+        // Pre-load high-res Mecha Shogun character sprites
+        this.playerSpriteImg = new Image();
+        this.playerSpriteImg.src = 'assets/player_mecha.jpg';
+        this.playerSpriteCanvas = null;
+        this.playerSpriteImg.onload = () => {
+            this.playerSpriteCanvas = this.createTransparentSprite(this.playerSpriteImg);
+        };
+
+        this.enemySpriteImg = new Image();
+        this.enemySpriteImg.src = 'assets/enemy_mecha.jpg';
+        this.enemySpriteCanvas = null;
+        this.enemySpriteImg.onload = () => {
+            this.enemySpriteCanvas = this.createTransparentSprite(this.enemySpriteImg);
+        };
         
         this.resize();
         window.addEventListener('resize', () => this.resize());
@@ -776,6 +792,29 @@ class CanvasController {
         if (this.flashTime > 0) {
             this.flashTime = Math.max(0, this.flashTime - deltaTime);
         }
+
+        // Update active floor shockwave pulses
+        if (this.floorPulses && this.floorPulses.length > 0) {
+            for (let i = this.floorPulses.length - 1; i >= 0; i--) {
+                const p = this.floorPulses[i];
+                p.life -= deltaTime * 0.002;
+                p.radius += (p.maxRadius - p.radius) * 0.12;
+                if (p.life <= 0) {
+                    this.floorPulses.splice(i, 1);
+                }
+            }
+        }
+    }
+
+    addFloorPulse(x, y, color = '#00f0ff', maxRadius = 160) {
+        if (!this.floorPulses) this.floorPulses = [];
+        this.floorPulses.push({
+            x, y, color,
+            radius: 10,
+            maxRadius: maxRadius,
+            life: 1.0,
+            maxLife: 1.0
+        });
     }
 
     // Apply screen shake to context matrix
@@ -806,6 +845,21 @@ class CanvasController {
         
         // Subtle futuristic grid lines background
         this.drawGrid();
+
+        // Render floor pulses
+        if (this.floorPulses && this.floorPulses.length > 0) {
+            this.ctx.save();
+            this.floorPulses.forEach(p => {
+                this.setNeonGlow(p.color, 16);
+                this.ctx.strokeStyle = p.color;
+                this.ctx.lineWidth = 2.5;
+                this.ctx.globalAlpha = Math.max(0, p.life * 0.6);
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                this.ctx.stroke();
+            });
+            this.ctx.restore();
+        }
 
         // Render full screen flash overlay if active
         if (this.flashTime > 0) {
@@ -936,264 +990,168 @@ class CanvasController {
         if (close) {
             this.ctx.closePath();
         }
-        
         this.ctx.stroke();
         this.ctx.restore();
     }
 
+    createTransparentSprite(img) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        const tCtx = tempCanvas.getContext('2d');
+        tCtx.drawImage(img, 0, 0);
+
+        try {
+            const imgData = tCtx.getImageData(0, 0, img.width, img.height);
+            const data = imgData.data;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+                // If pixel is near-black OR pure white background fill (strips sprite sheet borders)
+                if ((r < 40 && g < 40 && b < 40) || (r > 220 && g > 220 && b > 220)) {
+                    data[i + 3] = 0; // Make transparent
+                }
+            }
+
+            tCtx.putImageData(imgData, 0, 0);
+        } catch (e) {
+            console.warn('Unable to process sprite background transparency:', e);
+        }
+        return tempCanvas;
+    }
+
     drawSamuraiCharacter(ctx, x, y, radius, color, angle, profileKey, isAiming, aimDx, aimDy, hpPercent, trailHistory = [], inChargingZone = false) {
-        // 1. Draw ghost trails (afterimages) if Ninja (hammer) or moving fast
+        ctx.save();
+
+        const isCyan = (color === '#00f0ff' || color === '#00ffff' || color.includes('00f0'));
+        const spriteCanvas = isCyan ? this.playerSpriteCanvas : this.enemySpriteCanvas;
+
+        // 1. Ghost trails (afterimages)
         if (trailHistory && trailHistory.length > 0) {
             trailHistory.forEach((pt, idx) => {
-                const opacity = (idx + 1) / (trailHistory.length + 1) * 0.28;
+                const opacity = ((idx + 1) / (trailHistory.length + 1)) * 0.35;
                 ctx.save();
-                this.setNeonGlow(color, 8);
-                ctx.strokeStyle = color;
                 ctx.globalAlpha = opacity;
-                ctx.lineWidth = 2.5;
-                
-                const ptDirX = Math.cos(pt.angle);
-                const ptDirY = Math.sin(pt.angle);
-                const ptPerpX = -ptDirY;
-                const ptPerpY = ptDirX;
-                
-                // Draw head
-                ctx.beginPath();
-                ctx.arc(pt.x + ptDirX * (radius * 0.5), pt.y + ptDirY * (radius * 0.5), radius * 0.35, 0, Math.PI * 2);
-                ctx.stroke();
-                
-                // Draw torso
-                const ptTorsoTopX = pt.x + ptDirX * (radius * 0.2);
-                const ptTorsoTopY = pt.y + ptDirY * (radius * 0.2);
-                const ptTorsoBottomX = pt.x - ptDirX * (radius * 0.4);
-                const ptTorsoBottomY = pt.y - ptDirY * (radius * 0.4);
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoTopX, ptTorsoTopY);
-                ctx.stroke();
-                
-                // Draw legs
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) - ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) - ptPerpY * (radius * 0.25));
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) + ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) + ptPerpY * (radius * 0.25));
-                ctx.stroke();
-
+                this.setNeonGlow(color, 12);
+                if (spriteCanvas) {
+                    ctx.save();
+                    ctx.translate(pt.x, pt.y);
+                    ctx.rotate(pt.angle + Math.PI / 2);
+                    const trailSize = radius * 2.85;
+                    ctx.drawImage(spriteCanvas, -trailSize / 2, -trailSize / 2, trailSize, trailSize);
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(pt.x, pt.y, radius * 0.85, 0, Math.PI * 2);
+                    ctx.fill();
+                }
                 ctx.restore();
             });
         }
 
+        // 2. Ambient Energy Glow Aura around character base
+        const auraPulse = 1.0 + Math.sin(Date.now() * 0.008) * 0.08;
         ctx.save();
-        
-        // 2. Draw Ki Guard Ring Shield
-        if (inChargingZone && !isAiming) {
-            ctx.save();
-            const pulse = 1.0 + Math.sin(Date.now() * 0.007) * 0.08;
-            this.setNeonGlow(color, 15);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath();
-            ctx.arc(x, y, radius * 1.55 * pulse, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-        }
-
-        // Draw Torso
-        this.setNeonGlow(color, 12);
+        this.setNeonGlow(color, 24);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3.5;
-        ctx.lineCap = 'round';
-        
-        const dirX = Math.cos(angle);
-        const dirY = Math.sin(angle);
-        const perpX = -dirY;
-        const perpY = dirX;
-        
-        const torsoTopX = x + dirX * (radius * 0.2);
-        const torsoTopY = y + dirY * (radius * 0.2);
-        const torsoBottomX = x - dirX * (radius * 0.4);
-        const torsoBottomY = y - dirY * (radius * 0.4);
-        
-        // Torso Line
+        ctx.lineWidth = 2.5;
+        ctx.globalAlpha = 0.6;
         ctx.beginPath();
-        ctx.moveTo(torsoBottomX, torsoBottomY);
-        ctx.lineTo(torsoTopX, torsoTopY);
-        ctx.stroke();
-
-        // 3. Draw Legs (makes it a real stickman!)
-        const leftHipX = torsoBottomX - perpX * (radius * 0.15);
-        const leftHipY = torsoBottomY - perpY * (radius * 0.15);
-        const rightHipX = torsoBottomX + perpX * (radius * 0.15);
-        const rightHipY = torsoBottomY + perpY * (radius * 0.15);
-
-        const leftFootX = leftHipX - dirX * (radius * 0.45) - perpX * (radius * 0.2);
-        const leftFootY = leftHipY - dirY * (radius * 0.45) - perpY * (radius * 0.2);
-        const rightFootX = rightHipX - dirX * (radius * 0.45) + perpX * (radius * 0.2);
-        const rightFootY = rightHipY - dirY * (radius * 0.45) + perpY * (radius * 0.2);
-
-        ctx.beginPath();
-        // Left Leg
-        ctx.moveTo(leftHipX, leftHipY);
-        ctx.lineTo(leftFootX, leftFootY);
-        // Right Leg
-        ctx.moveTo(rightHipX, rightHipY);
-        ctx.lineTo(rightFootX, rightFootY);
-        ctx.stroke();
-        
-        // Draw Shoulders
-        const leftShoulderX = torsoTopX - perpX * (radius * 0.35);
-        const leftShoulderY = torsoTopY - perpY * (radius * 0.35);
-        const rightShoulderX = torsoTopX + perpX * (radius * 0.35);
-        const rightShoulderY = torsoTopY + perpY * (radius * 0.35);
-        
-        ctx.beginPath();
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(rightShoulderX, rightShoulderY);
-        ctx.stroke();
-        
-        // Draw Head
-        const headX = x + dirX * (radius * 0.5);
-        const headY = y + dirY * (radius * 0.5);
-        ctx.fillStyle = '#0f0f1b';
-        ctx.beginPath();
-        ctx.arc(headX, headY, radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Glowing visor slit (Exactly like the cyber-mask on the picture!)
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.0;
-        ctx.beginPath();
-        ctx.moveTo(headX - perpX * (radius * 0.2) + dirX * (radius * 0.1), headY - perpY * (radius * 0.2) + dirY * (radius * 0.1));
-        ctx.lineTo(headX + perpX * (radius * 0.2) + dirX * (radius * 0.1), headY + perpY * (radius * 0.2) + dirY * (radius * 0.1));
+        ctx.arc(x, y, radius * 1.25 * auraPulse, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
-        
-        // 4. Draw flowing cyber-scarf/obi for Cyber Ronin (katana)
-        if (profileKey === 'katana') {
+
+        // Ki Guard Shield Ring if in charging zone
+        if (inChargingZone && !isAiming) {
             ctx.save();
-            this.setNeonGlow(color, 12);
+            const shieldPulse = 1.0 + Math.sin(Date.now() * 0.01) * 0.08;
+            this.setNeonGlow(color, 28);
             ctx.strokeStyle = color;
             ctx.lineWidth = 3.5;
-            ctx.lineCap = 'round';
-            
-            const neckX = x + dirX * (radius * 0.3);
-            const neckY = y + dirY * (radius * 0.3);
-            
-            const waveOffset = Math.sin(Date.now() * 0.012) * 6;
-            const oppositeAngle = angle + Math.PI;
-            
+            ctx.setLineDash([8, 6]);
             ctx.beginPath();
-            ctx.moveTo(neckX, neckY);
-            const midX = neckX + Math.cos(oppositeAngle) * (radius * 0.7) + Math.cos(oppositeAngle + Math.PI/2) * waveOffset;
-            const midY = neckY + Math.sin(oppositeAngle) * (radius * 0.7) + Math.sin(oppositeAngle + Math.PI/2) * waveOffset;
-            const endX = neckX + Math.cos(oppositeAngle) * (radius * 1.4) - Math.cos(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            const endY = neckY + Math.sin(oppositeAngle) * (radius * 1.4) - Math.sin(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            
-            ctx.quadraticCurveTo(midX, midY, endX, endY);
+            ctx.arc(x, y, radius * 1.65 * shieldPulse, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
         }
 
-        // Draw Hat/Helmet based on profile
-        this.resetNeonGlow();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        if (profileKey === 'blades') {
-            // Samurai Shogun Helmet (Kabuto)
-            ctx.beginPath();
-            ctx.arc(headX, headY - radius * 0.1, radius * 0.3, Math.PI, 0);
-            ctx.stroke();
-            
-            // Large Golden Crescent Horns
-            ctx.save();
-            this.setNeonGlow('#ffaa00', 10);
-            ctx.strokeStyle = '#ffaa00';
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
-            ctx.arc(headX - radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.35, false);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(headX + radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.65, true);
-            ctx.stroke();
-            ctx.restore();
+        // 3. DRAW REAL MECHA SAMURAI SPRITE GRAPHIC (Matching Screenshot 2!)
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle + Math.PI / 2);
+
+        if (spriteCanvas) {
+            const spriteSize = radius * 2.85;
+            this.setNeonGlow(color, 18);
+            ctx.drawImage(spriteCanvas, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
         } else {
-            // Straw Hat (Ronin / Ninja) - Cyber kasa with glowing neon rim!
-            ctx.fillStyle = '#1b1b22';
+            // Fallback if canvas transparency step is loading
+            const fallbackImg = isCyan ? this.playerSpriteImg : this.enemySpriteImg;
+            if (fallbackImg && fallbackImg.complete) {
+                const spriteSize = radius * 2.85;
+                this.setNeonGlow(color, 18);
+                ctx.drawImage(fallbackImg, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
+            }
+        }
+        ctx.restore();
+
+        // 4. DYNAMIC AIMING SWORD LASER OVERLAY (Only drawn when aiming drag action!)
+        if (isAiming) {
+            ctx.save();
+            const swordAngle = Math.atan2(-aimDy, -aimDx);
+            const handX = x + Math.cos(swordAngle) * (radius * 0.5);
+            const handY = y + Math.sin(swordAngle) * (radius * 0.5);
+
+            const swordLength = radius * 2.2;
+            const swordEndX = handX + Math.cos(swordAngle) * swordLength;
+            const swordEndY = handY + Math.sin(swordAngle) * swordLength;
+
+            // Outer Neon Glow Blade Sheath
+            this.setNeonGlow(color, 24);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + dirX * (radius * 0.35), headY + dirY * (radius * 0.35)); // peak
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.closePath();
-            ctx.fill();
+            ctx.moveTo(handX, handY);
+            ctx.lineTo(swordEndX, swordEndY);
             ctx.stroke();
 
-            // Glowing cyan rim for Ronin hat
-            ctx.save();
-            this.setNeonGlow(color, 10);
-            ctx.strokeStyle = color;
+            // Inner Hot White Core Blade
+            ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Hilt Guard (Tsuba)
+            this.setNeonGlow('#ffcc00', 16);
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 5;
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.moveTo(handX - Math.sin(swordAngle) * 7, handY + Math.cos(swordAngle) * 7);
+            ctx.lineTo(handX + Math.sin(swordAngle) * 7, handY - Math.cos(swordAngle) * 7);
             ctx.stroke();
             ctx.restore();
         }
-        
-        // Draw Katana (sword)
-        this.setNeonGlow(color, 16);
-        ctx.strokeStyle = '#ffffff';
-        ctx.shadowColor = color;
-        ctx.lineWidth = 2.5;
-        
-        let swordAngle = angle + Math.PI * 0.25;
-        if (isAiming) {
-            swordAngle = Math.atan2(-aimDy, -aimDx) - Math.PI * 0.15;
-        }
-        
-        const handX = x + perpX * (radius * 0.4);
-        const handY = y + perpY * (radius * 0.4);
-        const swordLength = radius * 1.35;
-        const swordEndX = handX + Math.cos(swordAngle) * swordLength;
-        const swordEndY = handY + Math.sin(swordAngle) * swordLength;
-        
-        ctx.beginPath();
-        ctx.moveTo(handX, handY);
-        ctx.lineTo(swordEndX, swordEndY);
-        ctx.stroke();
-        
-        // Draw Hilt (Tsuba)
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(handX - Math.sin(swordAngle) * 4, handY + Math.cos(swordAngle) * 4);
-        ctx.lineTo(handX + Math.sin(swordAngle) * 4, handY - Math.cos(swordAngle) * 4);
-        ctx.stroke();
 
-        // 5. Draw Arms (connecting shoulders to hands)
-        this.resetNeonGlow();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        // Arm holding the sword
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(handX, handY);
-        // Free arm in fighting pose
-        const freeHandX = rightShoulderX + dirX * (radius * 0.1) + perpX * (radius * 0.3);
-        const freeHandY = rightShoulderY + dirY * (radius * 0.1) + perpY * (radius * 0.3);
-        ctx.moveTo(rightShoulderX, rightShoulderY);
-        ctx.lineTo(freeHandX, freeHandY);
-        ctx.stroke();
-        
-        // Draw simple health bar above head
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(x - 20, y - radius - 15, 40, 4);
+        // 5. Futuristic Floating Health Bar
+        const barW = Math.max(54, radius * 1.6);
+        const barH = 6;
+        const barY = y - radius - 24;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(x - barW / 2, barY, barW, barH);
+
+        this.setNeonGlow(color, 10);
         ctx.fillStyle = color;
-        ctx.fillRect(x - 20, y - radius - 15, hpPercent * 40, 4);
-        
+        ctx.fillRect(x - barW / 2, barY, Math.max(0, hpPercent * barW), barH);
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(x - barW / 2, barY, barW, barH);
+
         ctx.restore();
     }
 }
@@ -1722,21 +1680,10 @@ class UIController {
     showScreen(activeScreenId) {
         for (const [key, element] of Object.entries(this.screens)) {
             if (!element) continue;
-            if (key === 'hud') {
-                if (activeScreenId === 'hud') {
-                    element.classList.remove('hidden');
-                } else if (activeScreenId === 'victory' || activeScreenId === 'gameover') {
-                    // Let HUD be faintly visible behind overlays
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+            if (key === activeScreenId) {
+                element.classList.remove('hidden');
             } else {
-                if (key === activeScreenId) {
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+                element.classList.add('hidden');
             }
         }
     }
@@ -2258,11 +2205,11 @@ class Player {
         // Trail history for ghost afterimages
         this.trailHistory = [];
         
-        // Size & weight definitions
+        // Size & weight definitions (Scaled up by ~75% for Mecha-Shogun graphics)
         this.profiles = {
             katana: {
                 name: "Cyber Ronin",
-                radius: 20,
+                radius: 34,
                 mass: 1.0,
                 baseHp: 100,
                 ramDamage: 100,
@@ -2271,7 +2218,7 @@ class Player {
             },
             blades: {
                 name: "Armored Shogun",
-                radius: 26,
+                radius: 42,
                 mass: 1.8,
                 baseHp: 150,
                 ramDamage: 180,
@@ -2280,7 +2227,7 @@ class Player {
             },
             hammer: {
                 name: "Shadow Ninja",
-                radius: 16,
+                radius: 28,
                 mass: 0.6,
                 baseHp: 70,
                 ramDamage: 70,
@@ -2658,7 +2605,7 @@ class Enemy {
         this.vx = 0;
         this.vy = 0;
         this.friction = 0.985;
-        this.radius = 20;
+        this.radius = 34;
         this.mass = 1.0;
         this.color = "#ff0077"; // Neon Pink
         
@@ -2682,11 +2629,11 @@ class Enemy {
         this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
         this.aiTimer = 1000; // time until next AI action
         
-        // Profiles for multiplayer vehicle matching
+        // Profiles for multiplayer vehicle matching (Scaled up by ~75%)
         this.profiles = {
-            katana: { radius: 20, mass: 1.0, color: "#ff0077" }, // Cyber Car
-            blades: { radius: 26, mass: 1.8, color: "#ff0088" }, // Plasma Truck
-            hammer: { radius: 16, mass: 0.6, color: "#ff4400" }  // Laser Cycle
+            katana: { radius: 34, mass: 1.0, color: "#ff0077" }, // Cyber Car
+            blades: { radius: 42, mass: 1.8, color: "#ff0088" }, // Plasma Truck
+            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }  // Laser Cycle
         };
     }
 
@@ -2694,36 +2641,36 @@ class Enemy {
         this.isBoss = isBoss;
         if (isBoss) {
             this.maxHp = 500;
-            this.radius = 24; // Torso radius
-            this.mass = 2.0;
+            this.radius = 42; // Torso radius (was 24)
+            this.mass = 2.5;
             this.color = 'crimson';
             
-            // Initialize ragdoll nodes
+            // Initialize scaled ragdoll nodes
             this.ragdollNodes = [
-                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 24, mass: 1.5, color: 'crimson' },
-                { name: 'head', x: this.x, y: this.y - 32, vx: 0, vy: 0, radius: 14, mass: 0.8, color: '#ff0055' },
-                { name: 'leftHand', x: this.x - 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'rightHand', x: this.x + 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'leftFoot', x: this.x - 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' },
-                { name: 'rightFoot', x: this.x + 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' }
+                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 42, mass: 2.0, color: 'crimson' },
+                { name: 'head', x: this.x, y: this.y - 52, vx: 0, vy: 0, radius: 24, mass: 1.0, color: '#ff0055' },
+                { name: 'leftHand', x: this.x - 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'rightHand', x: this.x + 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'leftFoot', x: this.x - 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' },
+                { name: 'rightFoot', x: this.x + 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' }
             ];
 
             // Define distance constraints between nodes
             this.ragdollConstraints = [
-                [0, 1, 32], // torso to head
-                [0, 2, 34], // torso to leftHand
-                [0, 3, 34], // torso to rightHand
-                [0, 4, 32], // torso to leftFoot
-                [0, 5, 32], // torso to rightFoot
-                [1, 2, 38], // head to leftHand
-                [1, 3, 38], // head to rightHand
-                [4, 5, 28]  // leftFoot to rightFoot
+                [0, 1, 52], // torso to head
+                [0, 2, 55], // torso to leftHand
+                [0, 3, 55], // torso to rightHand
+                [0, 4, 52], // torso to leftFoot
+                [0, 5, 52], // torso to rightFoot
+                [1, 2, 60], // head to leftHand
+                [1, 3, 60], // head to rightHand
+                [4, 5, 45]  // leftFoot to rightFoot
             ];
         } else {
             this.ragdollNodes = null;
             this.ragdollConstraints = null;
             this.maxHp = 100;
-            this.radius = 20;
+            this.radius = 34;
             this.mass = 1.0;
             this.color = "#ff0077";
         }
@@ -3126,127 +3073,25 @@ class Enemy {
 
         ctx.save();
 
-        if (this.isBoss && this.ragdollNodes) {
-            const torso = this.ragdollNodes[0];
-            const head = this.ragdollNodes[1];
-            const leftHand = this.ragdollNodes[2];
-            const rightHand = this.ragdollNodes[3];
-            const leftFoot = this.ragdollNodes[4];
-            const rightFoot = this.ragdollNodes[5];
+        // Standard or Boss Mecha Shogun Enemy rendering
+        const renderRadius = this.isBoss ? this.radius * 1.25 : this.radius;
+        const enemyColor = this.color || '#ff0077';
 
-            // 1. Draw glowing neon bones (limbs)
-            canvasController.setNeonGlow(this.color, 15);
-            ctx.strokeStyle = this.color;
-            ctx.lineWidth = 9;
-            ctx.lineCap = 'round';
-            this.ragdollConstraints.forEach(([idxA, idxB]) => {
-                const nodeA = this.ragdollNodes[idxA];
-                const nodeB = this.ragdollNodes[idxB];
-                ctx.beginPath();
-                ctx.moveTo(nodeA.x, nodeA.y);
-                ctx.lineTo(nodeB.x, nodeB.y);
-                ctx.stroke();
-            });
-
-            // 2. Draw Giant Shogun Shoulder Pads
-            canvasController.setNeonGlow(this.color, 12);
-            ctx.fillStyle = '#1b0f14';
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2.5;
-            
-            ctx.beginPath();
-            ctx.arc(torso.x - 22, torso.y - 12, 12, Math.PI, 0);
-            ctx.fill();
-            ctx.stroke();
-            
-            ctx.beginPath();
-            ctx.arc(torso.x + 22, torso.y - 12, 12, Math.PI, 0);
-            ctx.fill();
-            ctx.stroke();
-
-            // 3. Draw each joint node
-            this.ragdollNodes.forEach(node => {
-                canvasController.setNeonGlow(node.color, 15);
-                ctx.fillStyle = '#0f050a';
-                ctx.strokeStyle = node.color;
-                ctx.lineWidth = 3.5;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                canvasController.resetNeonGlow();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, node.radius * 0.5, 0, Math.PI * 2);
-                ctx.stroke();
-            });
-
-            // 4. Draw giant Kabuto Samurai Horns
-            canvasController.setNeonGlow(head.color, 12);
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(head.x - 8, head.y - 10, 10, 0, Math.PI * 1.5, true);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(head.x + 8, head.y - 10, 10, Math.PI, Math.PI * 1.5);
-            ctx.stroke();
-
-            // 5. Draw Head Visor (faces player)
-            const angleToPlayer = Math.atan2(this.game.player.y - head.y, this.game.player.x - head.x);
-            ctx.save();
-            ctx.translate(head.x, head.y);
-            ctx.rotate(angleToPlayer);
-            ctx.fillStyle = '#00ffff';
-            ctx.shadowColor = '#00ffff';
-            ctx.shadowBlur = 10;
-            ctx.fillRect(head.radius * 0.1, -head.radius * 0.3, head.radius * 0.6, head.radius * 0.6);
-            ctx.restore();
-
-            // 6. Draw glowing neon katanas in hands
-            canvasController.setNeonGlow(this.color, 18);
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 3.5;
-            
-            const leftSwordAngle = Math.atan2(leftHand.y - torso.y, leftHand.x - torso.x) + Math.PI * 0.15;
-            ctx.beginPath();
-            ctx.moveTo(leftHand.x, leftHand.y);
-            ctx.lineTo(leftHand.x + Math.cos(leftSwordAngle) * 45, leftHand.y + Math.sin(leftSwordAngle) * 45);
-            ctx.stroke();
-            
-            const rightSwordAngle = Math.atan2(rightHand.y - torso.y, rightHand.x - torso.x) - Math.PI * 0.15;
-            ctx.beginPath();
-            ctx.moveTo(rightHand.x, rightHand.y);
-            ctx.lineTo(rightHand.x + Math.cos(rightSwordAngle) * 45, rightHand.y + Math.sin(rightSwordAngle) * 45);
-            ctx.stroke();
-
-            canvasController.resetNeonGlow();
-
-            // 7. Draw health bar above boss head
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-            ctx.fillRect(head.x - 30, head.y - head.radius - 28, 60, 5);
-            ctx.fillStyle = this.color;
-            ctx.fillRect(head.x - 30, head.y - head.radius - 28, (this.hp / this.maxHp) * 60, 5);
-        } else {
-            // --- DRAW STANDARD SAMURAI ENEMY ---
-             canvasController.drawSamuraiCharacter(
-                ctx, 
-                this.x, 
-                this.y, 
-                this.radius, 
-                this.color, 
-                this.angle, 
-                'katana', 
-                false, 
-                0, 
-                0, 
-                this.hp / this.maxHp,
-                this.trailHistory,
-                (this.y < 150)
-            );
-        }
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            renderRadius, 
+            enemyColor, 
+            this.angle, 
+            'blades', 
+            false, 
+            0, 
+            0, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y < 150)
+        );
 
         ctx.restore();
     }
@@ -4039,6 +3884,7 @@ class Game {
                 // Damage top tower
                 this.topTower.hp = Math.max(0, this.topTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#ff0077', 180);
                 this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -4049,6 +3895,7 @@ class Game {
                 // Damage bottom tower
                 this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#00f0ff', 180);
                 this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -4062,6 +3909,7 @@ class Game {
                 // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
                 if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
                     this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.addFloorPulse(p.x, p.y, '#ffffff', 200);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
                     this.canvasCtrl.shake(7, 120);
                     this.audioSynth.playParry();
@@ -4159,6 +4007,7 @@ class Game {
                     
                     this.audioSynth.playClash();
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.canvasCtrl.addFloorPulse((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#00f0ff', 160);
                     this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
                 }
             });
@@ -4195,6 +4044,7 @@ class Game {
                 
                 this.audioSynth.playClash();
                 this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.canvasCtrl.addFloorPulse((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#00f0ff', 160);
                 this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
             }
         }
@@ -4227,6 +4077,7 @@ class Game {
                     this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
                     
                     this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.addFloorPulse(this.player.x, 85, '#ff0077', 220);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
                     this.canvasCtrl.shake(14, 300);
                     this.audioSynth.playHit();
@@ -4278,6 +4129,7 @@ class Game {
                 this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
                 
                 this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.addFloorPulse(hittingNode.x, h - 85, '#00f0ff', 220);
                 this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
                 this.canvasCtrl.shake(14, 300);
                 this.audioSynth.playHit();
@@ -4327,18 +4179,18 @@ class Game {
 
     // Main Engine rendering calls
     draw() {
-        // Clear screen with custom trails persistence (motion blur)
-        const opacityTrail = this.gameState === 'playing' ? 0.38 : 0.8;
+        // Clear screen with custom trails persistence (motion blur during play, full 1.0 clear in menus)
+        const opacityTrail = this.gameState === 'playing' ? 0.38 : 1.0;
         this.canvasCtrl.clear(opacityTrail);
         
         // Apply camera screen shake translations
         this.canvasCtrl.applyTransformations();
         
-        // Draw one-way gate visual effects
-        this.drawOneWayGates();
-        
-        // Draw center lava barrier
-        this.drawLavaBarrier();
+        // Draw one-way gate visual effects and lava barrier only when in active playing state!
+        if (this.gameState === 'playing') {
+            this.drawOneWayGates();
+            this.drawLavaBarrier();
+        }
 
         // Draw glowing particles
         this.particles.draw(this.canvasCtrl.ctx);

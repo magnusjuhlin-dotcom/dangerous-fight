@@ -42,11 +42,11 @@ export class Player {
         // Trail history for ghost afterimages
         this.trailHistory = [];
         
-        // Size & weight definitions
+        // Size & weight definitions (Scaled up by ~75% for Mecha-Shogun graphics)
         this.profiles = {
             katana: {
                 name: "Cyber Ronin",
-                radius: 20,
+                radius: 34,
                 mass: 1.0,
                 baseHp: 100,
                 ramDamage: 100,
@@ -55,7 +55,7 @@ export class Player {
             },
             blades: {
                 name: "Armored Shogun",
-                radius: 26,
+                radius: 42,
                 mass: 1.8,
                 baseHp: 150,
                 ramDamage: 180,
@@ -64,7 +64,7 @@ export class Player {
             },
             hammer: {
                 name: "Shadow Ninja",
-                radius: 16,
+                radius: 28,
                 mass: 0.6,
                 baseHp: 70,
                 ramDamage: 70,

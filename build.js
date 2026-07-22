@@ -84,11 +84,18 @@ if (fs.existsSync(androidAssetsDir)) {
     if (!fs.existsSync(androidAssetsSrcDir)) {
         fs.mkdirSync(androidAssetsSrcDir, { recursive: true });
     }
-    fs.writeFileSync(
-        path.join(androidAssetsSrcDir, 'bundle.js'),
-        bundleCode,
-        'utf8'
-    );
+    // Copy assets directory
+    const assetsDir = path.join(__dirname, 'assets');
+    const androidAssetsAssetsDir = path.join(androidAssetsDir, 'assets');
+    if (fs.existsSync(assetsDir)) {
+        if (!fs.existsSync(androidAssetsAssetsDir)) {
+            fs.mkdirSync(androidAssetsAssetsDir, { recursive: true });
+        }
+        const assetFiles = fs.readdirSync(assetsDir);
+        for (const file of assetFiles) {
+            fs.copyFileSync(path.join(assetsDir, file), path.join(androidAssetsAssetsDir, file));
+        }
+    }
     
     console.log('Files successfully copied to Android assets!');
 } else {

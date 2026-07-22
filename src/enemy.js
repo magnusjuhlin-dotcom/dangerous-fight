@@ -10,7 +10,7 @@ export class Enemy {
         this.vx = 0;
         this.vy = 0;
         this.friction = 0.985;
-        this.radius = 20;
+        this.radius = 34;
         this.mass = 1.0;
         this.color = "#ff0077"; // Neon Pink
         
@@ -34,11 +34,11 @@ export class Enemy {
         this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
         this.aiTimer = 1000; // time until next AI action
         
-        // Profiles for multiplayer vehicle matching
+        // Profiles for multiplayer vehicle matching (Scaled up by ~75%)
         this.profiles = {
-            katana: { radius: 20, mass: 1.0, color: "#ff0077" }, // Cyber Car
-            blades: { radius: 26, mass: 1.8, color: "#ff0088" }, // Plasma Truck
-            hammer: { radius: 16, mass: 0.6, color: "#ff4400" }  // Laser Cycle
+            katana: { radius: 34, mass: 1.0, color: "#ff0077" }, // Cyber Car
+            blades: { radius: 42, mass: 1.8, color: "#ff0088" }, // Plasma Truck
+            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }  // Laser Cycle
         };
     }
 
@@ -46,36 +46,36 @@ export class Enemy {
         this.isBoss = isBoss;
         if (isBoss) {
             this.maxHp = 500;
-            this.radius = 24; // Torso radius
-            this.mass = 2.0;
+            this.radius = 42; // Torso radius (was 24)
+            this.mass = 2.5;
             this.color = 'crimson';
             
-            // Initialize ragdoll nodes
+            // Initialize scaled ragdoll nodes
             this.ragdollNodes = [
-                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 24, mass: 1.5, color: 'crimson' },
-                { name: 'head', x: this.x, y: this.y - 32, vx: 0, vy: 0, radius: 14, mass: 0.8, color: '#ff0055' },
-                { name: 'leftHand', x: this.x - 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'rightHand', x: this.x + 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'leftFoot', x: this.x - 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' },
-                { name: 'rightFoot', x: this.x + 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' }
+                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 42, mass: 2.0, color: 'crimson' },
+                { name: 'head', x: this.x, y: this.y - 52, vx: 0, vy: 0, radius: 24, mass: 1.0, color: '#ff0055' },
+                { name: 'leftHand', x: this.x - 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'rightHand', x: this.x + 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'leftFoot', x: this.x - 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' },
+                { name: 'rightFoot', x: this.x + 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' }
             ];
 
             // Define distance constraints between nodes
             this.ragdollConstraints = [
-                [0, 1, 32], // torso to head
-                [0, 2, 34], // torso to leftHand
-                [0, 3, 34], // torso to rightHand
-                [0, 4, 32], // torso to leftFoot
-                [0, 5, 32], // torso to rightFoot
-                [1, 2, 38], // head to leftHand
-                [1, 3, 38], // head to rightHand
-                [4, 5, 28]  // leftFoot to rightFoot
+                [0, 1, 52], // torso to head
+                [0, 2, 55], // torso to leftHand
+                [0, 3, 55], // torso to rightHand
+                [0, 4, 52], // torso to leftFoot
+                [0, 5, 52], // torso to rightFoot
+                [1, 2, 60], // head to leftHand
+                [1, 3, 60], // head to rightHand
+                [4, 5, 45]  // leftFoot to rightFoot
             ];
         } else {
             this.ragdollNodes = null;
             this.ragdollConstraints = null;
             this.maxHp = 100;
-            this.radius = 20;
+            this.radius = 34;
             this.mass = 1.0;
             this.color = "#ff0077";
         }
@@ -478,127 +478,25 @@ export class Enemy {
 
         ctx.save();
 
-        if (this.isBoss && this.ragdollNodes) {
-            const torso = this.ragdollNodes[0];
-            const head = this.ragdollNodes[1];
-            const leftHand = this.ragdollNodes[2];
-            const rightHand = this.ragdollNodes[3];
-            const leftFoot = this.ragdollNodes[4];
-            const rightFoot = this.ragdollNodes[5];
+        // Standard or Boss Mecha Shogun Enemy rendering
+        const renderRadius = this.isBoss ? this.radius * 1.25 : this.radius;
+        const enemyColor = this.color || '#ff0077';
 
-            // 1. Draw glowing neon bones (limbs)
-            canvasController.setNeonGlow(this.color, 15);
-            ctx.strokeStyle = this.color;
-            ctx.lineWidth = 9;
-            ctx.lineCap = 'round';
-            this.ragdollConstraints.forEach(([idxA, idxB]) => {
-                const nodeA = this.ragdollNodes[idxA];
-                const nodeB = this.ragdollNodes[idxB];
-                ctx.beginPath();
-                ctx.moveTo(nodeA.x, nodeA.y);
-                ctx.lineTo(nodeB.x, nodeB.y);
-                ctx.stroke();
-            });
-
-            // 2. Draw Giant Shogun Shoulder Pads
-            canvasController.setNeonGlow(this.color, 12);
-            ctx.fillStyle = '#1b0f14';
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2.5;
-            
-            ctx.beginPath();
-            ctx.arc(torso.x - 22, torso.y - 12, 12, Math.PI, 0);
-            ctx.fill();
-            ctx.stroke();
-            
-            ctx.beginPath();
-            ctx.arc(torso.x + 22, torso.y - 12, 12, Math.PI, 0);
-            ctx.fill();
-            ctx.stroke();
-
-            // 3. Draw each joint node
-            this.ragdollNodes.forEach(node => {
-                canvasController.setNeonGlow(node.color, 15);
-                ctx.fillStyle = '#0f050a';
-                ctx.strokeStyle = node.color;
-                ctx.lineWidth = 3.5;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                canvasController.resetNeonGlow();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, node.radius * 0.5, 0, Math.PI * 2);
-                ctx.stroke();
-            });
-
-            // 4. Draw giant Kabuto Samurai Horns
-            canvasController.setNeonGlow(head.color, 12);
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(head.x - 8, head.y - 10, 10, 0, Math.PI * 1.5, true);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(head.x + 8, head.y - 10, 10, Math.PI, Math.PI * 1.5);
-            ctx.stroke();
-
-            // 5. Draw Head Visor (faces player)
-            const angleToPlayer = Math.atan2(this.game.player.y - head.y, this.game.player.x - head.x);
-            ctx.save();
-            ctx.translate(head.x, head.y);
-            ctx.rotate(angleToPlayer);
-            ctx.fillStyle = '#00ffff';
-            ctx.shadowColor = '#00ffff';
-            ctx.shadowBlur = 10;
-            ctx.fillRect(head.radius * 0.1, -head.radius * 0.3, head.radius * 0.6, head.radius * 0.6);
-            ctx.restore();
-
-            // 6. Draw glowing neon katanas in hands
-            canvasController.setNeonGlow(this.color, 18);
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 3.5;
-            
-            const leftSwordAngle = Math.atan2(leftHand.y - torso.y, leftHand.x - torso.x) + Math.PI * 0.15;
-            ctx.beginPath();
-            ctx.moveTo(leftHand.x, leftHand.y);
-            ctx.lineTo(leftHand.x + Math.cos(leftSwordAngle) * 45, leftHand.y + Math.sin(leftSwordAngle) * 45);
-            ctx.stroke();
-            
-            const rightSwordAngle = Math.atan2(rightHand.y - torso.y, rightHand.x - torso.x) - Math.PI * 0.15;
-            ctx.beginPath();
-            ctx.moveTo(rightHand.x, rightHand.y);
-            ctx.lineTo(rightHand.x + Math.cos(rightSwordAngle) * 45, rightHand.y + Math.sin(rightSwordAngle) * 45);
-            ctx.stroke();
-
-            canvasController.resetNeonGlow();
-
-            // 7. Draw health bar above boss head
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-            ctx.fillRect(head.x - 30, head.y - head.radius - 28, 60, 5);
-            ctx.fillStyle = this.color;
-            ctx.fillRect(head.x - 30, head.y - head.radius - 28, (this.hp / this.maxHp) * 60, 5);
-        } else {
-            // --- DRAW STANDARD SAMURAI ENEMY ---
-             canvasController.drawSamuraiCharacter(
-                ctx, 
-                this.x, 
-                this.y, 
-                this.radius, 
-                this.color, 
-                this.angle, 
-                'katana', 
-                false, 
-                0, 
-                0, 
-                this.hp / this.maxHp,
-                this.trailHistory,
-                (this.y < 150)
-            );
-        }
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            renderRadius, 
+            enemyColor, 
+            this.angle, 
+            'blades', 
+            false, 
+            0, 
+            0, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y < 150)
+        );
 
         ctx.restore();
     }

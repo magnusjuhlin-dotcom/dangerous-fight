@@ -792,6 +792,7 @@ class Game {
                 // Damage top tower
                 this.topTower.hp = Math.max(0, this.topTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#ff0077', 180);
                 this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -802,6 +803,7 @@ class Game {
                 // Damage bottom tower
                 this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#00f0ff', 180);
                 this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -815,6 +817,7 @@ class Game {
                 // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
                 if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
                     this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.addFloorPulse(p.x, p.y, '#ffffff', 200);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
                     this.canvasCtrl.shake(7, 120);
                     this.audioSynth.playParry();
@@ -912,6 +915,7 @@ class Game {
                     
                     this.audioSynth.playClash();
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.canvasCtrl.addFloorPulse((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#00f0ff', 160);
                     this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
                 }
             });
@@ -948,6 +952,7 @@ class Game {
                 
                 this.audioSynth.playClash();
                 this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.canvasCtrl.addFloorPulse((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#00f0ff', 160);
                 this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
             }
         }
@@ -980,6 +985,7 @@ class Game {
                     this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
                     
                     this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.addFloorPulse(this.player.x, 85, '#ff0077', 220);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
                     this.canvasCtrl.shake(14, 300);
                     this.audioSynth.playHit();
@@ -1031,6 +1037,7 @@ class Game {
                 this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
                 
                 this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.addFloorPulse(hittingNode.x, h - 85, '#00f0ff', 220);
                 this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
                 this.canvasCtrl.shake(14, 300);
                 this.audioSynth.playHit();
@@ -1080,18 +1087,18 @@ class Game {
 
     // Main Engine rendering calls
     draw() {
-        // Clear screen with custom trails persistence (motion blur)
-        const opacityTrail = this.gameState === 'playing' ? 0.38 : 0.8;
+        // Clear screen with custom trails persistence (motion blur during play, full 1.0 clear in menus)
+        const opacityTrail = this.gameState === 'playing' ? 0.38 : 1.0;
         this.canvasCtrl.clear(opacityTrail);
         
         // Apply camera screen shake translations
         this.canvasCtrl.applyTransformations();
         
-        // Draw one-way gate visual effects
-        this.drawOneWayGates();
-        
-        // Draw center lava barrier
-        this.drawLavaBarrier();
+        // Draw one-way gate visual effects and lava barrier only when in active playing state!
+        if (this.gameState === 'playing') {
+            this.drawOneWayGates();
+            this.drawLavaBarrier();
+        }
 
         // Draw glowing particles
         this.particles.draw(this.canvasCtrl.ctx);

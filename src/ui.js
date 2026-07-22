@@ -41,21 +41,10 @@ export class UIController {
     showScreen(activeScreenId) {
         for (const [key, element] of Object.entries(this.screens)) {
             if (!element) continue;
-            if (key === 'hud') {
-                if (activeScreenId === 'hud') {
-                    element.classList.remove('hidden');
-                } else if (activeScreenId === 'victory' || activeScreenId === 'gameover') {
-                    // Let HUD be faintly visible behind overlays
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+            if (key === activeScreenId) {
+                element.classList.remove('hidden');
             } else {
-                if (key === activeScreenId) {
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+                element.classList.add('hidden');
             }
         }
     }

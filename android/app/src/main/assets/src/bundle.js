@@ -714,8 +714,19 @@ class CanvasController {
         this.flashMaxTime = 0;
         this.flashColor = '#ffffff';
         
+        // Cyberpunk Multi-Layered Background & Reactive Hexagon Matrix state
+        this.blades = [];
+        this.neonSigns = [];
+        this.floorPulses = [];
+        this.stars = [];
+        this.fogTime = 0;
+        
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+        this.initBladeSkyline();
+        window.addEventListener('resize', () => {
+            this.resize();
+            this.initBladeSkyline();
+        });
     }
 
     // Adapt canvas resolution to screen size and high pixel density (Retina/OLED)
@@ -738,6 +749,98 @@ class CanvasController {
         this.canvas.style.height = `${this.height}px`;
     }
 
+    // Generate procedural giant Cyber-Katana & Energy Blade Skyline
+    initBladeSkyline() {
+        this.blades = [];
+        this.neonSigns = [];
+        this.stars = [];
+        
+        const totalWidth = this.width || 800;
+        const totalHeight = this.height || 600;
+        
+        // Static cyber starfield
+        for (let i = 0; i < 55; i++) {
+            this.stars.push({
+                x: Math.random() * totalWidth,
+                y: Math.random() * (totalHeight * 0.55),
+                size: Math.random() * 2 + 0.8,
+                color: Math.random() > 0.5 ? 'rgba(0, 240, 255, 0.7)' : 'rgba(255, 0, 119, 0.7)'
+            });
+        }
+        
+        // Generate giant blade silhouettes across total width
+        let currentX = -20;
+        const colors = ['#00f0ff', '#ff0077', '#ffaa00', '#00ff99', '#9900ff'];
+        
+        while (currentX < totalWidth + 60) {
+            const bWidth = Math.floor(Math.random() * 25) + 40; // 40px - 65px wide blade
+            const bHeight = Math.floor(Math.random() * 180) + 220; // 220px - 400px tall!
+            const tilt = (Math.random() - 0.5) * 0.18; // slight angle tilt
+            const neonColor = colors[Math.floor(Math.random() * colors.length)];
+            
+            // Generate glowing energy nodes along blade flat
+            const nodes = [];
+            const numNodes = Math.floor(bHeight / 40);
+            for (let n = 1; n < numNodes; n++) {
+                nodes.push({
+                    relY: -n * 40,
+                    size: Math.random() * 3 + 2,
+                    isFlickering: Math.random() < 0.2
+                });
+            }
+            
+            this.blades.push({
+                x: currentX + bWidth / 2,
+                width: bWidth,
+                height: bHeight,
+                tilt,
+                neonColor,
+                nodes,
+                hasTsuba: Math.random() < 0.7,
+                tsubaWidth: bWidth * 1.6
+            });
+            
+            currentX += bWidth + Math.floor(Math.random() * 15) + 5;
+        }
+        
+        // Place 3 iconic glowing neon billboards on prominent giant blades
+        const numBlades = this.blades.length;
+        if (numBlades >= 3) {
+            const signConfigs = [
+                { text: 'DANGEROUS FIGHT', color: '#00f0ff', bladeIdx: Math.floor(numBlades * 0.18) },
+                { text: 'NEON DOJO ⚡', color: '#ffaa00', bladeIdx: Math.floor(numBlades * 0.5) },
+                { text: 'CYBER ARENA 💀', color: '#ff0077', bladeIdx: Math.floor(numBlades * 0.82) }
+            ];
+            
+            signConfigs.forEach(cfg => {
+                const b = this.blades[cfg.bladeIdx];
+                if (b) {
+                    this.neonSigns.push({
+                        text: cfg.text,
+                        color: cfg.color,
+                        x: b.x,
+                        heightY: b.height * 0.65,
+                        flicker: 1.0
+                    });
+                }
+            });
+        }
+    }
+
+    // Trigger reactive floor energy ripple pulse
+    addFloorPulse(x, y, color = '#00f0ff', maxRadius = 180) {
+        if (this.floorPulses.length > 12) this.floorPulses.shift();
+        this.floorPulses.push({
+            x,
+            y,
+            radius: 10,
+            maxRadius,
+            color,
+            life: 650,
+            maxLife: 650
+        });
+    }
+
     // Trigger screen-shake effect
     shake(intensity = 8, duration = 300) {
         this.shakeIntensity = intensity;
@@ -745,7 +848,7 @@ class CanvasController {
         this.shakeTime = duration;
     }
 
-    // Update screen shake offsets, grid scrolling, and screen flash timers
+    // Update screen shake offsets, grid scrolling, floor pulses, and screen flash timers
     update(deltaTime, player = null) {
         if (this.shakeTime > 0) {
             this.shakeTime -= deltaTime;
@@ -771,6 +874,25 @@ class CanvasController {
         
         this.gridOffsetX = (this.gridOffsetX - speedX * deltaTime) % 240;
         this.gridOffsetY = (this.gridOffsetY - speedY * deltaTime) % 240;
+
+        // Update active floor pulses
+        this.floorPulses.forEach(p => {
+            p.life -= deltaTime;
+            p.radius += (p.maxRadius / p.maxLife) * deltaTime;
+        });
+        this.floorPulses = this.floorPulses.filter(p => p.life > 0);
+
+        // Update fog time
+        this.fogTime += deltaTime * 0.001;
+
+        // Flicker neon signs
+        this.neonSigns.forEach(s => {
+            if (Math.random() < 0.02) {
+                s.flicker = Math.random() > 0.2 ? 1.0 : 0.3;
+            } else {
+                s.flicker = 1.0;
+            }
+        });
 
         // Fade active screen flashes
         if (this.flashTime > 0) {
@@ -798,19 +920,31 @@ class CanvasController {
         this.flashMaxTime = duration;
     }
 
-    // Clear screen with custom background trails (creates amazing motion blur)
+    // Clear screen with crisp HD background rendering and motion blur separation
     clear(opacity = 0.25) {
-        // Clear with a slight transparency to let neon trails fade beautifully
-        this.ctx.fillStyle = `rgba(10, 10, 15, ${opacity})`;
+        // 1. Crisp full wipe of the background layer (prevents muddy motion smearing)
+        this.ctx.fillStyle = '#06060e';
         this.ctx.fillRect(0, 0, this.width, this.height);
         
-        // Subtle futuristic grid lines background
-        this.drawGrid();
+        // 2. Render razor-sharp Cyberpunk night sky & Giant Cyber-Katana Blade Skyline
+        this.drawBladeSkyline(this.ctx);
+        
+        // 3. Render High-Contrast 3D Perspective Grid & Reactive Hexagon Matrix
+        this.draw3DGridAndHexagons(this.ctx);
 
-        // Render full screen flash overlay if active
+        // 4. Render Volumetric Cyber Fog
+        this.drawCyberFog(this.ctx);
+
+        // 5. Apply subtle motion-blur trail persistence overlay for dynamic entities only
+        if (opacity < 1.0) {
+            this.ctx.fillStyle = `rgba(6, 6, 14, ${1.0 - opacity})`;
+            this.ctx.fillRect(0, 0, this.width, this.height);
+        }
+
+        // 6. Render full screen flash overlay if active
         if (this.flashTime > 0) {
             this.ctx.save();
-            const alpha = (this.flashTime / this.flashMaxTime) * 0.18; // cap max opacity to prevent blinding
+            const alpha = (this.flashTime / this.flashMaxTime) * 0.18; // cap max opacity
             this.ctx.fillStyle = this.flashColor;
             this.ctx.globalAlpha = alpha;
             this.ctx.fillRect(0, 0, this.width, this.height);
@@ -818,55 +952,262 @@ class CanvasController {
         }
     }
 
-    // Ambient dual-layer cyberpunk parallax background grid
-    drawGrid() {
-        // --- Layer 1: Background Grid (Faint, slow-scrolling, wide spacing) ---
-        const spacingBg = 80;
-        this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.012)';
-        this.ctx.lineWidth = 1;
+    // 1. Cyberpunk Night Sky & Giant Cyber-Katana Blade Skyline
+    drawBladeSkyline(ctx) {
+        ctx.save();
         
-        const scrollBgX = (this.gridOffsetX * 0.4) % spacingBg;
-        const scrollBgY = (this.gridOffsetY * 0.4) % spacingBg;
+        const horizonY = this.height * 0.55; // horizon at mid-screen
         
-        const startBgX = scrollBgX < 0 ? scrollBgX + spacingBg : scrollBgX;
-        for (let x = startBgX - spacingBg; x < this.width + spacingBg; x += spacingBg) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.height);
-            this.ctx.stroke();
+        // Deep night sky gradient
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
+        skyGrad.addColorStop(0, '#020206');
+        skyGrad.addColorStop(0.5, '#0a061a');
+        skyGrad.addColorStop(1, '#1c0e3a');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, this.width, horizonY);
+        
+        // Draw static stars
+        this.stars.forEach(s => {
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        
+        // Draw giant Katana/Blade silhouettes
+        this.blades.forEach(b => {
+            ctx.save();
+            ctx.translate(b.x, horizonY);
+            ctx.rotate(b.tilt);
+            
+            const halfW = b.width / 2;
+            const tipY = -b.height;
+            
+            // --- 1. Blade Body (Steel silhouette with sharp glowing neon edge) ---
+            ctx.fillStyle = '#090a14';
+            ctx.strokeStyle = b.neonColor;
+            ctx.lineWidth = 2.0;
+            
+            ctx.beginPath();
+            ctx.moveTo(-halfW, 0); // bottom left
+            ctx.lineTo(-halfW * 0.8, tipY + 45); // curve to tip left
+            ctx.lineTo(0, tipY); // sharp sword tip apex!
+            ctx.lineTo(halfW * 0.8, tipY + 25); // tip right bevel
+            ctx.lineTo(halfW, 0); // bottom right
+            ctx.closePath();
+            
+            ctx.fill();
+            
+            // High neon glow for cutting edge
+            ctx.save();
+            this.setNeonGlow(b.neonColor, 12);
+            ctx.stroke();
+            ctx.restore();
+            
+            // --- 2. Glowing Plasma Fuller (Groove line down blade center) ---
+            ctx.save();
+            this.setNeonGlow(b.neonColor, 8);
+            ctx.strokeStyle = b.neonColor;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(0, tipY + 45);
+            ctx.stroke();
+            ctx.restore();
+            
+            // --- 3. Tsuka / Hilt Handle (Below Tsuba guard) ---
+            ctx.fillStyle = '#05050a';
+            ctx.fillRect(-halfW * 0.7, 0, halfW * 1.4, 40);
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.lineWidth = 1;
+            // Cross wrap lines on handle
+            for (let hy = 5; hy < 35; hy += 10) {
+                ctx.beginPath();
+                ctx.moveTo(-halfW * 0.7, hy);
+                ctx.lineTo(halfW * 0.7, hy + 5);
+                ctx.moveTo(halfW * 0.7, hy);
+                ctx.lineTo(-halfW * 0.7, hy + 5);
+                ctx.stroke();
+            }
+            
+            // --- 4. Tsuba (Handguard) ---
+            if (b.hasTsuba) {
+                ctx.save();
+                this.setNeonGlow(b.neonColor, 10);
+                ctx.fillStyle = '#0c0d1c';
+                ctx.strokeStyle = b.neonColor;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, b.tsubaWidth / 2, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+            
+            // --- 5. Glowing Power Nodes / Runes ---
+            b.nodes.forEach(n => {
+                if (n.relY > tipY + 50) {
+                    ctx.save();
+                    this.setNeonGlow(b.neonColor, 8);
+                    ctx.fillStyle = (n.isFlickering && Math.random() < 0.2) ? '#ffffff' : b.neonColor;
+                    ctx.beginPath();
+                    ctx.arc(0, n.relY, n.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            });
+            
+            ctx.restore();
+        });
+        
+        // Draw Neon Billboards mounted on giant blades
+        this.neonSigns.forEach(s => {
+            const signY = horizonY - s.heightY;
+            if (signY > 20 && signY < horizonY - 30) {
+                ctx.save();
+                this.setNeonGlow(s.color, 18);
+                ctx.globalAlpha = s.flicker;
+                ctx.fillStyle = s.color;
+                ctx.font = '900 14px "Orbitron", sans-serif';
+                ctx.textAlign = 'center';
+                
+                // Sign border box
+                ctx.strokeStyle = s.color;
+                ctx.lineWidth = 2.5;
+                const textWidth = ctx.measureText(s.text).width + 24;
+                ctx.fillStyle = 'rgba(6, 6, 14, 0.85)';
+                ctx.fillRect(s.x - textWidth / 2, signY - 17, textWidth, 26);
+                ctx.strokeRect(s.x - textWidth / 2, signY - 17, textWidth, 26);
+                
+                ctx.fillStyle = s.color;
+                ctx.fillText(s.text, s.x, signY + 2);
+                ctx.restore();
+            }
+        });
+        
+        ctx.restore();
+    }
+
+    // 2. 3D Perspective Grid & Reactive Hexagon Matrix (High Contrast)
+    draw3DGridAndHexagons(ctx) {
+        ctx.save();
+        
+        const horizonY = this.height * 0.50;
+        const horizonHeight = this.height - horizonY;
+        const vanishingX = this.width / 2;
+        
+        // --- High-Contrast 3D Perspective Grid Lines ---
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.16)';
+        ctx.lineWidth = 1.5;
+        
+        // Radiating vertical lines from vanishing point
+        const numRadialLines = 22;
+        for (let i = -numRadialLines; i <= numRadialLines; i++) {
+            const bottomX = vanishingX + i * (this.width / numRadialLines) * 1.5;
+            ctx.beginPath();
+            ctx.moveTo(vanishingX, horizonY);
+            ctx.lineTo(bottomX, this.height);
+            ctx.stroke();
         }
         
-        const startBgY = scrollBgY < 0 ? scrollBgY + spacingBg : scrollBgY;
-        for (let y = startBgY - spacingBg; y < this.height + spacingBg; y += spacingBg) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.width, y);
-            this.ctx.stroke();
+        // Perspective horizontal lines
+        const numHoriLines = 14;
+        for (let i = 0; i < numHoriLines; i++) {
+            const normY = Math.pow(i / numHoriLines, 1.8);
+            const lineY = horizonY + normY * horizonHeight;
+            const scrollOffset = (this.gridOffsetY * 0.3) % 20;
+            const finalY = lineY + scrollOffset * normY;
+            
+            if (finalY >= horizonY && finalY <= this.height) {
+                ctx.beginPath();
+                ctx.moveTo(0, finalY);
+                ctx.lineTo(this.width, finalY);
+                ctx.stroke();
+            }
         }
 
-        // --- Layer 2: Foreground Grid (Brighter, fast-scrolling, narrow spacing) ---
-        const spacingFg = 40;
-        this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.032)';
-        this.ctx.lineWidth = 1.5;
+        // --- Hexagon Matrix Overlay with Reactive Pulses ---
+        const hexRadius = 32;
+        const hexHeight = Math.sqrt(3) * hexRadius;
         
-        const scrollFgX = this.gridOffsetX % spacingFg;
-        const scrollFgY = this.gridOffsetY % spacingFg;
+        ctx.lineWidth = 1.2;
         
-        const startFgX = scrollFgX < 0 ? scrollFgX + spacingFg : scrollFgX;
-        for (let x = startFgX - spacingFg; x < this.width + spacingFg; x += spacingFg) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.height);
-            this.ctx.stroke();
+        // Iterate hex grid over lower half (arena floor)
+        for (let y = horizonY; y < this.height + hexRadius; y += hexHeight * 0.75) {
+            const rowIdx = Math.floor(y / (hexHeight * 0.75));
+            const xOffset = (rowIdx % 2 === 0) ? 0 : hexRadius * 1.5;
+            
+            for (let x = xOffset - hexRadius; x < this.width + hexRadius * 2; x += hexRadius * 3) {
+                // Check if hex is close to any active floor pulse
+                let glowColor = null;
+                let glowAlpha = 0;
+                
+                for (let pIdx = 0; pIdx < this.floorPulses.length; pIdx++) {
+                    const p = this.floorPulses[pIdx];
+                    const dist = Math.hypot(x - p.x, y - p.y);
+                    const ringWidth = 65;
+                    if (Math.abs(dist - p.radius) < ringWidth) {
+                        const intensity = 1 - Math.abs(dist - p.radius) / ringWidth;
+                        const pulseAlpha = (p.life / p.maxLife) * intensity * 0.85;
+                        if (pulseAlpha > glowAlpha) {
+                            glowAlpha = pulseAlpha;
+                            glowColor = p.color;
+                        }
+                    }
+                }
+                
+                ctx.beginPath();
+                for (let side = 0; side < 6; side++) {
+                    const angle = (Math.PI / 3) * side;
+                    const hx = x + hexRadius * 0.6 * Math.cos(angle);
+                    const hy = y + hexRadius * 0.6 * Math.sin(angle);
+                    if (side === 0) ctx.moveTo(hx, hy);
+                    else ctx.lineTo(hx, hy);
+                }
+                ctx.closePath();
+                
+                if (glowColor && glowAlpha > 0.05) {
+                    ctx.save();
+                    this.setNeonGlow(glowColor, 12);
+                    ctx.strokeStyle = glowColor;
+                    ctx.globalAlpha = glowAlpha;
+                    ctx.stroke();
+                    ctx.fillStyle = glowColor;
+                    ctx.globalAlpha = glowAlpha * 0.20;
+                    ctx.fill();
+                    ctx.restore();
+                } else {
+                    ctx.strokeStyle = 'rgba(0, 240, 255, 0.09)';
+                    ctx.globalAlpha = 1;
+                    ctx.stroke();
+                }
+            }
         }
         
-        const startFgY = scrollFgY < 0 ? scrollFgY + spacingFg : scrollFgY;
-        for (let y = startFgY - spacingFg; y < this.height + spacingFg; y += spacingFg) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.width, y);
-            this.ctx.stroke();
-        }
+        ctx.restore();
+    }
+
+    // 3. Volumetric Cyber Fog Layer
+    drawCyberFog(ctx) {
+        ctx.save();
+        
+        const driftX = Math.sin(this.fogTime * 2) * 40;
+        
+        // Top Cyan Fog
+        const topGrad = ctx.createLinearGradient(0, 0, 0, 110);
+        topGrad.addColorStop(0, 'rgba(0, 240, 255, 0.07)');
+        topGrad.addColorStop(1, 'rgba(0, 240, 255, 0)');
+        ctx.fillStyle = topGrad;
+        ctx.fillRect(driftX - 50, 0, this.width + 100, 110);
+        
+        // Bottom Pink/Orange Fog
+        const botGrad = ctx.createLinearGradient(0, this.height - 110, 0, this.height);
+        botGrad.addColorStop(0, 'rgba(255, 0, 119, 0)');
+        botGrad.addColorStop(1, 'rgba(255, 0, 119, 0.07)');
+        ctx.fillStyle = botGrad;
+        ctx.fillRect(-driftX - 50, this.height - 110, this.width + 100, 110);
+        
+        ctx.restore();
     }
 
     /* NEON DRAWING UTILITIES */
@@ -942,258 +1283,323 @@ class CanvasController {
     }
 
     drawSamuraiCharacter(ctx, x, y, radius, color, angle, profileKey, isAiming, aimDx, aimDy, hpPercent, trailHistory = [], inChargingZone = false) {
-        // 1. Draw ghost trails (afterimages) if Ninja (hammer) or moving fast
-        if (trailHistory && trailHistory.length > 0) {
-            trailHistory.forEach((pt, idx) => {
-                const opacity = (idx + 1) / (trailHistory.length + 1) * 0.28;
-                ctx.save();
-                this.setNeonGlow(color, 8);
-                ctx.strokeStyle = color;
-                ctx.globalAlpha = opacity;
-                ctx.lineWidth = 2.5;
-                
-                const ptDirX = Math.cos(pt.angle);
-                const ptDirY = Math.sin(pt.angle);
-                const ptPerpX = -ptDirY;
-                const ptPerpY = ptDirX;
-                
-                // Draw head
-                ctx.beginPath();
-                ctx.arc(pt.x + ptDirX * (radius * 0.5), pt.y + ptDirY * (radius * 0.5), radius * 0.35, 0, Math.PI * 2);
-                ctx.stroke();
-                
-                // Draw torso
-                const ptTorsoTopX = pt.x + ptDirX * (radius * 0.2);
-                const ptTorsoTopY = pt.y + ptDirY * (radius * 0.2);
-                const ptTorsoBottomX = pt.x - ptDirX * (radius * 0.4);
-                const ptTorsoBottomY = pt.y - ptDirY * (radius * 0.4);
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoTopX, ptTorsoTopY);
-                ctx.stroke();
-                
-                // Draw legs
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) - ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) - ptPerpY * (radius * 0.25));
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) + ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) + ptPerpY * (radius * 0.25));
-                ctx.stroke();
-
-                ctx.restore();
-            });
-        }
-
         ctx.save();
-        
-        // 2. Draw Ki Guard Ring Shield
-        if (inChargingZone && !isAiming) {
-            ctx.save();
-            const pulse = 1.0 + Math.sin(Date.now() * 0.007) * 0.08;
-            this.setNeonGlow(color, 15);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath();
-            ctx.arc(x, y, radius * 1.55 * pulse, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-        }
 
-        // Draw Torso
-        this.setNeonGlow(color, 12);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3.5;
-        ctx.lineCap = 'round';
-        
         const dirX = Math.cos(angle);
         const dirY = Math.sin(angle);
         const perpX = -dirY;
         const perpY = dirX;
-        
-        const torsoTopX = x + dirX * (radius * 0.2);
-        const torsoTopY = y + dirY * (radius * 0.2);
-        const torsoBottomX = x - dirX * (radius * 0.4);
-        const torsoBottomY = y - dirY * (radius * 0.4);
-        
-        // Torso Line
-        ctx.beginPath();
-        ctx.moveTo(torsoBottomX, torsoBottomY);
-        ctx.lineTo(torsoTopX, torsoTopY);
-        ctx.stroke();
 
-        // 3. Draw Legs (makes it a real stickman!)
-        const leftHipX = torsoBottomX - perpX * (radius * 0.15);
-        const leftHipY = torsoBottomY - perpY * (radius * 0.15);
-        const rightHipX = torsoBottomX + perpX * (radius * 0.15);
-        const rightHipY = torsoBottomY + perpY * (radius * 0.15);
+        // Is player cyan or enemy crimson?
+        const isCyan = (color === '#00f0ff' || color === '#00ffff' || color.includes('00f0'));
+        const armorBaseColor = isCyan ? '#183854' : '#54182c';
+        const armorDarkColor = isCyan ? '#0c1e30' : '#300c19';
+        const armorHighlight = isCyan ? '#2c5d88' : '#882c4d';
+        const hornColor = '#ffcc00'; // Vibrant Golden Horns
 
-        const leftFootX = leftHipX - dirX * (radius * 0.45) - perpX * (radius * 0.2);
-        const leftFootY = leftHipY - dirY * (radius * 0.45) - perpY * (radius * 0.2);
-        const rightFootX = rightHipX - dirX * (radius * 0.45) + perpX * (radius * 0.2);
-        const rightFootY = rightHipY - dirY * (radius * 0.45) + perpY * (radius * 0.2);
+        // 1. Ghost trails (afterimages)
+        if (trailHistory && trailHistory.length > 0) {
+            trailHistory.forEach((pt, idx) => {
+                const opacity = ((idx + 1) / (trailHistory.length + 1)) * 0.32;
+                ctx.save();
+                this.setNeonGlow(color, 12);
+                ctx.fillStyle = armorBaseColor;
+                ctx.globalAlpha = opacity;
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, radius * 0.85, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+        }
 
-        ctx.beginPath();
-        // Left Leg
-        ctx.moveTo(leftHipX, leftHipY);
-        ctx.lineTo(leftFootX, leftFootY);
-        // Right Leg
-        ctx.moveTo(rightHipX, rightHipY);
-        ctx.lineTo(rightFootX, rightFootY);
-        ctx.stroke();
-        
-        // Draw Shoulders
-        const leftShoulderX = torsoTopX - perpX * (radius * 0.35);
-        const leftShoulderY = torsoTopY - perpY * (radius * 0.35);
-        const rightShoulderX = torsoTopX + perpX * (radius * 0.35);
-        const rightShoulderY = torsoTopY + perpY * (radius * 0.35);
-        
-        ctx.beginPath();
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(rightShoulderX, rightShoulderY);
-        ctx.stroke();
-        
-        // Draw Head
-        const headX = x + dirX * (radius * 0.5);
-        const headY = y + dirY * (radius * 0.5);
-        ctx.fillStyle = '#0f0f1b';
-        ctx.beginPath();
-        ctx.arc(headX, headY, radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Glowing visor slit (Exactly like the cyber-mask on the picture!)
+        // 2. Ambient Power Pulse Aura around character base
+        const auraPulse = 1.0 + Math.sin(Date.now() * 0.008) * 0.08;
         ctx.save();
+        this.setNeonGlow(color, 18);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2.0;
+        ctx.lineWidth = 2.2;
+        ctx.globalAlpha = 0.5;
         ctx.beginPath();
-        ctx.moveTo(headX - perpX * (radius * 0.2) + dirX * (radius * 0.1), headY - perpY * (radius * 0.2) + dirY * (radius * 0.1));
-        ctx.lineTo(headX + perpX * (radius * 0.2) + dirX * (radius * 0.1), headY + perpY * (radius * 0.2) + dirY * (radius * 0.1));
+        ctx.arc(x, y, radius * 1.15 * auraPulse, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
-        
-        // 4. Draw flowing cyber-scarf/obi for Cyber Ronin (katana)
-        if (profileKey === 'katana') {
+
+        // Ki Guard Shield Ring if in charging zone
+        if (inChargingZone && !isAiming) {
             ctx.save();
-            this.setNeonGlow(color, 12);
+            const shieldPulse = 1.0 + Math.sin(Date.now() * 0.01) * 0.08;
+            this.setNeonGlow(color, 24);
             ctx.strokeStyle = color;
-            ctx.lineWidth = 3.5;
-            ctx.lineCap = 'round';
-            
-            const neckX = x + dirX * (radius * 0.3);
-            const neckY = y + dirY * (radius * 0.3);
-            
-            const waveOffset = Math.sin(Date.now() * 0.012) * 6;
-            const oppositeAngle = angle + Math.PI;
-            
+            ctx.lineWidth = 3;
+            ctx.setLineDash([8, 6]);
             ctx.beginPath();
-            ctx.moveTo(neckX, neckY);
-            const midX = neckX + Math.cos(oppositeAngle) * (radius * 0.7) + Math.cos(oppositeAngle + Math.PI/2) * waveOffset;
-            const midY = neckY + Math.sin(oppositeAngle) * (radius * 0.7) + Math.sin(oppositeAngle + Math.PI/2) * waveOffset;
-            const endX = neckX + Math.cos(oppositeAngle) * (radius * 1.4) - Math.cos(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            const endY = neckY + Math.sin(oppositeAngle) * (radius * 1.4) - Math.sin(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            
-            ctx.quadraticCurveTo(midX, midY, endX, endY);
+            ctx.arc(x, y, radius * 1.6 * shieldPulse, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
         }
 
-        // Draw Hat/Helmet based on profile
-        this.resetNeonGlow();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        if (profileKey === 'blades') {
-            // Samurai Shogun Helmet (Kabuto)
-            ctx.beginPath();
-            ctx.arc(headX, headY - radius * 0.1, radius * 0.3, Math.PI, 0);
-            ctx.stroke();
-            
-            // Large Golden Crescent Horns
+        // 3. MECHA SHOGUN KUSAZURI (Pansrat skört / Tassets)
+        const torsoCenterY = y - dirY * (radius * 0.05);
+        const torsoCenterX = x - dirX * (radius * 0.05);
+        const chestWidth = radius * 0.75;
+        const chestHeight = radius * 0.90;
+
+        // Draw 3 Kusazuri skirt plates hanging from waist
+        const waistX = torsoCenterX - dirX * (chestHeight * 0.45);
+        const waistY = torsoCenterY - dirY * (chestHeight * 0.45);
+
+        [-0.45, 0, 0.45].forEach(offsetRatio => {
+            const plateCenterX = waistX + perpX * (chestWidth * offsetRatio) - dirX * (radius * 0.25);
+            const plateCenterY = waistY + perpY * (chestWidth * offsetRatio) - dirY * (radius * 0.25);
+
             ctx.save();
-            this.setNeonGlow('#ffaa00', 10);
-            ctx.strokeStyle = '#ffaa00';
-            ctx.lineWidth = 2.5;
+            this.setNeonGlow(color, 8);
+            ctx.fillStyle = armorDarkColor;
+            ctx.strokeStyle = hornColor;
+            ctx.lineWidth = 1.8;
             ctx.beginPath();
-            ctx.arc(headX - radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.35, false);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(headX + radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.65, true);
+            ctx.rect(plateCenterX - radius * 0.15, plateCenterY - radius * 0.2, radius * 0.3, radius * 0.35);
+            ctx.fill();
             ctx.stroke();
             ctx.restore();
-        } else {
-            // Straw Hat (Ronin / Ninja) - Cyber kasa with glowing neon rim!
-            ctx.fillStyle = '#1b1b22';
+        });
+
+        // 4. MECHA LEGS & BOOTS (Pansrade ben & Knäskydd)
+        const hipOffset = chestWidth * 0.55;
+        const leftHip = { x: torsoCenterX - dirX * (chestHeight * 0.4) - perpX * hipOffset, y: torsoCenterY - dirY * (chestHeight * 0.4) - perpY * hipOffset };
+        const rightHip = { x: torsoCenterX - dirX * (chestHeight * 0.4) + perpX * hipOffset, y: torsoCenterY - dirY * (chestHeight * 0.4) + perpY * hipOffset };
+
+        const legLength = radius * 0.70;
+        const leftFoot = { x: leftHip.x - dirX * legLength - perpX * (radius * 0.15), y: leftHip.y - dirY * legLength - perpY * (radius * 0.15) };
+        const rightFoot = { x: rightHip.x - dirX * legLength + perpX * (radius * 0.15), y: rightHip.y - dirY * legLength + perpY * (radius * 0.15) };
+
+        this.setNeonGlow(color, 12);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 5.5;
+        ctx.lineCap = 'round';
+        // Left Leg
+        ctx.beginPath();
+        ctx.moveTo(leftHip.x, leftHip.y);
+        ctx.lineTo(leftFoot.x, leftFoot.y);
+        ctx.stroke();
+        // Right Leg
+        ctx.beginPath();
+        ctx.moveTo(rightHip.x, rightHip.y);
+        ctx.lineTo(rightFoot.x, rightFoot.y);
+        ctx.stroke();
+
+        // Knee guard plates
+        this.setNeonGlow(hornColor, 10);
+        ctx.fillStyle = hornColor;
+        ctx.beginPath();
+        ctx.arc((leftHip.x + leftFoot.x) * 0.5, (leftHip.y + leftFoot.y) * 0.5, radius * 0.12, 0, Math.PI * 2);
+        ctx.arc((rightHip.x + rightFoot.x) * 0.5, (rightHip.y + rightFoot.y) * 0.5, radius * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 5. MECHA CHESTPLATE / TORSO (Vibrerande Metall-Bröstplåt med fasade kanter)
+        const pTopLeft = { x: torsoCenterX + dirX * (chestHeight * 0.5) - perpX * chestWidth, y: torsoCenterY + dirY * (chestHeight * 0.5) - perpY * chestWidth };
+        const pTopRight = { x: torsoCenterX + dirX * (chestHeight * 0.5) + perpX * chestWidth, y: torsoCenterY + dirY * (chestHeight * 0.5) + perpY * chestWidth };
+        const pBotRight = { x: torsoCenterX - dirX * (chestHeight * 0.5) + perpX * (chestWidth * 0.75), y: torsoCenterY - dirY * (chestHeight * 0.5) + perpY * (chestWidth * 0.75) };
+        const pBotLeft = { x: torsoCenterX - dirX * (chestHeight * 0.5) - perpX * (chestWidth * 0.75), y: torsoCenterY - dirY * (chestHeight * 0.5) - perpY * (chestWidth * 0.75) };
+
+        // Linear metallic gradient fill across chestplate
+        const chestGrad = ctx.createLinearGradient(pTopLeft.x, pTopLeft.y, pBotRight.x, pBotRight.y);
+        chestGrad.addColorStop(0, armorHighlight);
+        chestGrad.addColorStop(0.5, armorBaseColor);
+        chestGrad.addColorStop(1, armorDarkColor);
+
+        ctx.fillStyle = chestGrad;
+        ctx.beginPath();
+        ctx.moveTo(pTopLeft.x, pTopLeft.y);
+        ctx.lineTo(pTopRight.x, pTopRight.y);
+        ctx.lineTo(pBotRight.x, pBotRight.y);
+        ctx.lineTo(pBotLeft.x, pBotLeft.y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Neon Glow border around Chestplate
+        this.setNeonGlow(color, 16);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3.5;
+        ctx.stroke();
+
+        // Gold Trim Line across chest
+        ctx.save();
+        ctx.strokeStyle = hornColor;
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        ctx.moveTo(pTopLeft.x, pTopLeft.y);
+        ctx.lineTo(torsoCenterX, torsoCenterY);
+        ctx.lineTo(pTopRight.x, pTopRight.y);
+        ctx.stroke();
+        ctx.restore();
+
+        // Glowing Chest Reactor Core (Power Crystal in center)
+        ctx.save();
+        const coreSize = radius * 0.28;
+        const corePulse = 0.85 + Math.sin(Date.now() * 0.012) * 0.15;
+        this.setNeonGlow(color, 20);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(torsoCenterX, torsoCenterY, coreSize * corePulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.restore();
+
+        // 6. GIANT MECHA SHOULDER PAULDRONS (Vinklade Axelskydd med Guldkanter)
+        const leftShoulder = { x: torsoCenterX + dirX * (chestHeight * 0.3) - perpX * (chestWidth * 1.2), y: torsoCenterY + dirY * (chestHeight * 0.3) - perpY * (chestWidth * 1.2) };
+        const rightShoulder = { x: torsoCenterX + dirX * (chestHeight * 0.3) + perpX * (chestWidth * 1.2), y: torsoCenterY + dirY * (chestHeight * 0.3) + perpY * (chestWidth * 1.2) };
+
+        const pauldronRadius = radius * 0.40;
+        [leftShoulder, rightShoulder].forEach(shoulderPt => {
+            ctx.save();
+            this.setNeonGlow(color, 16);
+            ctx.fillStyle = armorBaseColor;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3.2;
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + dirX * (radius * 0.35), headY + dirY * (radius * 0.35)); // peak
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.closePath();
+            ctx.arc(shoulderPt.x, shoulderPt.y, pauldronRadius, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
 
-            // Glowing cyan rim for Ronin hat
-            ctx.save();
-            this.setNeonGlow(color, 10);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2.5;
+            // Inner Golden Emblem Ring
+            this.setNeonGlow(hornColor, 10);
+            ctx.strokeStyle = hornColor;
+            ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.arc(shoulderPt.x, shoulderPt.y, pauldronRadius * 0.55, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
-        }
-        
-        // Draw Katana (sword)
+        });
+
+        // 7. SHOGUN KABUTO HELMET, GOLDEN HORNS & VISOR
+        const headX = torsoCenterX + dirX * (radius * 0.60);
+        const headY = torsoCenterY + dirY * (radius * 0.60);
+        const headRadius = radius * 0.42;
+
+        // Helmet base fill
+        ctx.save();
         this.setNeonGlow(color, 16);
+        ctx.fillStyle = armorDarkColor;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3.8;
+        ctx.beginPath();
+        ctx.arc(headX, headY, headRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // SOLID GOLDEN SHOGUN CRESCENT HORNS (Maedate)
+        this.setNeonGlow(hornColor, 20);
+        ctx.fillStyle = hornColor;
         ctx.strokeStyle = '#ffffff';
-        ctx.shadowColor = color;
-        ctx.lineWidth = 2.5;
-        
+        ctx.lineWidth = 1.5;
+
+        // Left Horn Crescent
+        ctx.beginPath();
+        ctx.arc(headX - perpX * (headRadius * 0.4) + dirX * (headRadius * 0.1),
+                headY - perpY * (headRadius * 0.4) + dirY * (headRadius * 0.1),
+                headRadius * 1.1, angle - Math.PI * 0.7, angle + Math.PI * 0.1, false);
+        ctx.lineTo(headX - perpX * (headRadius * 0.2), headY - perpY * (headRadius * 0.2));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Right Horn Crescent
+        ctx.beginPath();
+        ctx.arc(headX + perpX * (headRadius * 0.4) + dirX * (headRadius * 0.1),
+                headY + perpY * (headRadius * 0.4) + dirY * (headRadius * 0.1),
+                headRadius * 1.1, angle - Math.PI * 0.1, angle + Math.PI * 0.7, false);
+        ctx.lineTo(headX + perpX * (headRadius * 0.2), headY + perpY * (headRadius * 0.2));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Glowing Cyber Visor Slit
+        this.setNeonGlow('#ffffff', 16);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(headX - perpX * (headRadius * 0.65) + dirX * (headRadius * 0.2),
+                   headY - perpY * (headRadius * 0.65) + dirY * (headRadius * 0.2));
+        ctx.lineTo(headX + perpX * (headRadius * 0.65) + dirX * (headRadius * 0.2),
+                   headY + perpY * (headRadius * 0.65) + dirY * (headRadius * 0.2));
+        ctx.stroke();
+        ctx.restore();
+
+        // 8. MASSIVE MECHA ENERGY BLADE (Katana / Broadsword)
         let swordAngle = angle + Math.PI * 0.25;
         if (isAiming) {
-            swordAngle = Math.atan2(-aimDy, -aimDx) - Math.PI * 0.15;
+            swordAngle = Math.atan2(-aimDy, -aimDx) - Math.PI * 0.12;
         }
-        
-        const handX = x + perpX * (radius * 0.4);
-        const handY = y + perpY * (radius * 0.4);
-        const swordLength = radius * 1.35;
+
+        const handX = rightShoulder.x + dirX * (radius * 0.25) + perpX * (radius * 0.35);
+        const handY = rightShoulder.y + dirY * (radius * 0.25) + perpY * (radius * 0.35);
+
+        const swordLength = radius * 1.85;
         const swordEndX = handX + Math.cos(swordAngle) * swordLength;
         const swordEndY = handY + Math.sin(swordAngle) * swordLength;
-        
+
+        // Outer Neon Glow Blade Sheath
+        ctx.save();
+        this.setNeonGlow(color, 24);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 7.5;
+        ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(handX, handY);
         ctx.lineTo(swordEndX, swordEndY);
         ctx.stroke();
-        
-        // Draw Hilt (Tsuba)
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(handX - Math.sin(swordAngle) * 4, handY + Math.cos(swordAngle) * 4);
-        ctx.lineTo(handX + Math.sin(swordAngle) * 4, handY - Math.cos(swordAngle) * 4);
+
+        // Inner Hot White Core Blade
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3.0;
         ctx.stroke();
 
-        // 5. Draw Arms (connecting shoulders to hands)
-        this.resetNeonGlow();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
+        // Hilt Guard (Tsuba)
+        this.setNeonGlow(hornColor, 16);
+        ctx.strokeStyle = hornColor;
+        ctx.lineWidth = 6;
         ctx.beginPath();
-        // Arm holding the sword
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(handX, handY);
-        // Free arm in fighting pose
-        const freeHandX = rightShoulderX + dirX * (radius * 0.1) + perpX * (radius * 0.3);
-        const freeHandY = rightShoulderY + dirY * (radius * 0.1) + perpY * (radius * 0.3);
-        ctx.moveTo(rightShoulderX, rightShoulderY);
-        ctx.lineTo(freeHandX, freeHandY);
+        ctx.moveTo(handX - Math.sin(swordAngle) * 8, handY + Math.cos(swordAngle) * 8);
+        ctx.lineTo(handX + Math.sin(swordAngle) * 8, handY - Math.cos(swordAngle) * 8);
         ctx.stroke();
-        
-        // Draw simple health bar above head
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(x - 20, y - radius - 15, 40, 4);
+        ctx.restore();
+
+        // Arm connecting Shoulder to Hand
+        this.setNeonGlow(color, 12);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4.8;
+        ctx.beginPath();
+        ctx.moveTo(rightShoulder.x, rightShoulder.y);
+        ctx.lineTo(handX, handY);
+        ctx.stroke();
+
+        // Left arm guard pose
+        const guardHandX = leftShoulder.x + dirX * (radius * 0.35) - perpX * (radius * 0.25);
+        const guardHandY = leftShoulder.y + dirY * (radius * 0.35) - perpY * (radius * 0.25);
+        ctx.beginPath();
+        ctx.moveTo(leftShoulder.x, leftShoulder.y);
+        ctx.lineTo(guardHandX, guardHandY);
+        ctx.stroke();
+
+        // 9. Futuristic Floating Health Bar
+        const barW = Math.max(54, radius * 1.6);
+        const barH = 6;
+        const barY = y - radius - 24;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(x - barW / 2, barY, barW, barH);
+
+        this.setNeonGlow(color, 10);
         ctx.fillStyle = color;
-        ctx.fillRect(x - 20, y - radius - 15, hpPercent * 40, 4);
-        
+        ctx.fillRect(x - barW / 2, barY, Math.max(0, hpPercent * barW), barH);
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(x - barW / 2, barY, barW, barH);
+
         ctx.restore();
     }
 }
@@ -2258,11 +2664,11 @@ class Player {
         // Trail history for ghost afterimages
         this.trailHistory = [];
         
-        // Size & weight definitions
+        // Size & weight definitions (Scaled up by ~75% for Mecha-Shogun graphics)
         this.profiles = {
             katana: {
                 name: "Cyber Ronin",
-                radius: 20,
+                radius: 34,
                 mass: 1.0,
                 baseHp: 100,
                 ramDamage: 100,
@@ -2271,7 +2677,7 @@ class Player {
             },
             blades: {
                 name: "Armored Shogun",
-                radius: 26,
+                radius: 42,
                 mass: 1.8,
                 baseHp: 150,
                 ramDamage: 180,
@@ -2280,7 +2686,7 @@ class Player {
             },
             hammer: {
                 name: "Shadow Ninja",
-                radius: 16,
+                radius: 28,
                 mass: 0.6,
                 baseHp: 70,
                 ramDamage: 70,
@@ -2658,7 +3064,7 @@ class Enemy {
         this.vx = 0;
         this.vy = 0;
         this.friction = 0.985;
-        this.radius = 20;
+        this.radius = 34;
         this.mass = 1.0;
         this.color = "#ff0077"; // Neon Pink
         
@@ -2682,11 +3088,11 @@ class Enemy {
         this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
         this.aiTimer = 1000; // time until next AI action
         
-        // Profiles for multiplayer vehicle matching
+        // Profiles for multiplayer vehicle matching (Scaled up by ~75%)
         this.profiles = {
-            katana: { radius: 20, mass: 1.0, color: "#ff0077" }, // Cyber Car
-            blades: { radius: 26, mass: 1.8, color: "#ff0088" }, // Plasma Truck
-            hammer: { radius: 16, mass: 0.6, color: "#ff4400" }  // Laser Cycle
+            katana: { radius: 34, mass: 1.0, color: "#ff0077" }, // Cyber Car
+            blades: { radius: 42, mass: 1.8, color: "#ff0088" }, // Plasma Truck
+            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }  // Laser Cycle
         };
     }
 
@@ -2694,36 +3100,36 @@ class Enemy {
         this.isBoss = isBoss;
         if (isBoss) {
             this.maxHp = 500;
-            this.radius = 24; // Torso radius
-            this.mass = 2.0;
+            this.radius = 42; // Torso radius (was 24)
+            this.mass = 2.5;
             this.color = 'crimson';
             
-            // Initialize ragdoll nodes
+            // Initialize scaled ragdoll nodes
             this.ragdollNodes = [
-                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 24, mass: 1.5, color: 'crimson' },
-                { name: 'head', x: this.x, y: this.y - 32, vx: 0, vy: 0, radius: 14, mass: 0.8, color: '#ff0055' },
-                { name: 'leftHand', x: this.x - 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'rightHand', x: this.x + 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
-                { name: 'leftFoot', x: this.x - 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' },
-                { name: 'rightFoot', x: this.x + 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' }
+                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 42, mass: 2.0, color: 'crimson' },
+                { name: 'head', x: this.x, y: this.y - 52, vx: 0, vy: 0, radius: 24, mass: 1.0, color: '#ff0055' },
+                { name: 'leftHand', x: this.x - 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'rightHand', x: this.x + 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'leftFoot', x: this.x - 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' },
+                { name: 'rightFoot', x: this.x + 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' }
             ];
 
             // Define distance constraints between nodes
             this.ragdollConstraints = [
-                [0, 1, 32], // torso to head
-                [0, 2, 34], // torso to leftHand
-                [0, 3, 34], // torso to rightHand
-                [0, 4, 32], // torso to leftFoot
-                [0, 5, 32], // torso to rightFoot
-                [1, 2, 38], // head to leftHand
-                [1, 3, 38], // head to rightHand
-                [4, 5, 28]  // leftFoot to rightFoot
+                [0, 1, 52], // torso to head
+                [0, 2, 55], // torso to leftHand
+                [0, 3, 55], // torso to rightHand
+                [0, 4, 52], // torso to leftFoot
+                [0, 5, 52], // torso to rightFoot
+                [1, 2, 60], // head to leftHand
+                [1, 3, 60], // head to rightHand
+                [4, 5, 45]  // leftFoot to rightFoot
             ];
         } else {
             this.ragdollNodes = null;
             this.ragdollConstraints = null;
             this.maxHp = 100;
-            this.radius = 20;
+            this.radius = 34;
             this.mass = 1.0;
             this.color = "#ff0077";
         }
@@ -4039,6 +4445,7 @@ class Game {
                 // Damage top tower
                 this.topTower.hp = Math.max(0, this.topTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#ff0077', 180);
                 this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -4049,6 +4456,7 @@ class Game {
                 // Damage bottom tower
                 this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#00f0ff', 180);
                 this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
@@ -4062,6 +4470,7 @@ class Game {
                 // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
                 if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
                     this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.addFloorPulse(p.x, p.y, '#ffffff', 200);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
                     this.canvasCtrl.shake(7, 120);
                     this.audioSynth.playParry();
@@ -4159,6 +4568,7 @@ class Game {
                     
                     this.audioSynth.playClash();
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.canvasCtrl.addFloorPulse((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#00f0ff', 160);
                     this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
                 }
             });
@@ -4195,6 +4605,7 @@ class Game {
                 
                 this.audioSynth.playClash();
                 this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.canvasCtrl.addFloorPulse((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#00f0ff', 160);
                 this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
             }
         }
@@ -4227,6 +4638,7 @@ class Game {
                     this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
                     
                     this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.addFloorPulse(this.player.x, 85, '#ff0077', 220);
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
                     this.canvasCtrl.shake(14, 300);
                     this.audioSynth.playHit();
@@ -4278,6 +4690,7 @@ class Game {
                 this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
                 
                 this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.addFloorPulse(hittingNode.x, h - 85, '#00f0ff', 220);
                 this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
                 this.canvasCtrl.shake(14, 300);
                 this.audioSynth.playHit();

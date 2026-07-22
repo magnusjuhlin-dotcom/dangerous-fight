@@ -22,6 +22,22 @@ export class CanvasController {
         this.flashTime = 0;
         this.flashMaxTime = 0;
         this.flashColor = '#ffffff';
+        this.floorPulses = [];
+
+        // Pre-load high-res Mecha Shogun character sprites
+        this.playerSpriteImg = new Image();
+        this.playerSpriteImg.src = 'assets/player_mecha.jpg';
+        this.playerSpriteCanvas = null;
+        this.playerSpriteImg.onload = () => {
+            this.playerSpriteCanvas = this.createTransparentSprite(this.playerSpriteImg);
+        };
+
+        this.enemySpriteImg = new Image();
+        this.enemySpriteImg.src = 'assets/enemy_mecha.jpg';
+        this.enemySpriteCanvas = null;
+        this.enemySpriteImg.onload = () => {
+            this.enemySpriteCanvas = this.createTransparentSprite(this.enemySpriteImg);
+        };
         
         this.resize();
         window.addEventListener('resize', () => this.resize());
@@ -85,6 +101,29 @@ export class CanvasController {
         if (this.flashTime > 0) {
             this.flashTime = Math.max(0, this.flashTime - deltaTime);
         }
+
+        // Update active floor shockwave pulses
+        if (this.floorPulses && this.floorPulses.length > 0) {
+            for (let i = this.floorPulses.length - 1; i >= 0; i--) {
+                const p = this.floorPulses[i];
+                p.life -= deltaTime * 0.002;
+                p.radius += (p.maxRadius - p.radius) * 0.12;
+                if (p.life <= 0) {
+                    this.floorPulses.splice(i, 1);
+                }
+            }
+        }
+    }
+
+    addFloorPulse(x, y, color = '#00f0ff', maxRadius = 160) {
+        if (!this.floorPulses) this.floorPulses = [];
+        this.floorPulses.push({
+            x, y, color,
+            radius: 10,
+            maxRadius: maxRadius,
+            life: 1.0,
+            maxLife: 1.0
+        });
     }
 
     // Apply screen shake to context matrix
@@ -115,6 +154,21 @@ export class CanvasController {
         
         // Subtle futuristic grid lines background
         this.drawGrid();
+
+        // Render floor pulses
+        if (this.floorPulses && this.floorPulses.length > 0) {
+            this.ctx.save();
+            this.floorPulses.forEach(p => {
+                this.setNeonGlow(p.color, 16);
+                this.ctx.strokeStyle = p.color;
+                this.ctx.lineWidth = 2.5;
+                this.ctx.globalAlpha = Math.max(0, p.life * 0.6);
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                this.ctx.stroke();
+            });
+            this.ctx.restore();
+        }
 
         // Render full screen flash overlay if active
         if (this.flashTime > 0) {
@@ -245,264 +299,168 @@ export class CanvasController {
         if (close) {
             this.ctx.closePath();
         }
-        
         this.ctx.stroke();
         this.ctx.restore();
     }
 
+    createTransparentSprite(img) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        const tCtx = tempCanvas.getContext('2d');
+        tCtx.drawImage(img, 0, 0);
+
+        try {
+            const imgData = tCtx.getImageData(0, 0, img.width, img.height);
+            const data = imgData.data;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+                // If pixel is near-black OR pure white background fill (strips sprite sheet borders)
+                if ((r < 40 && g < 40 && b < 40) || (r > 220 && g > 220 && b > 220)) {
+                    data[i + 3] = 0; // Make transparent
+                }
+            }
+
+            tCtx.putImageData(imgData, 0, 0);
+        } catch (e) {
+            console.warn('Unable to process sprite background transparency:', e);
+        }
+        return tempCanvas;
+    }
+
     drawSamuraiCharacter(ctx, x, y, radius, color, angle, profileKey, isAiming, aimDx, aimDy, hpPercent, trailHistory = [], inChargingZone = false) {
-        // 1. Draw ghost trails (afterimages) if Ninja (hammer) or moving fast
+        ctx.save();
+
+        const isCyan = (color === '#00f0ff' || color === '#00ffff' || color.includes('00f0'));
+        const spriteCanvas = isCyan ? this.playerSpriteCanvas : this.enemySpriteCanvas;
+
+        // 1. Ghost trails (afterimages)
         if (trailHistory && trailHistory.length > 0) {
             trailHistory.forEach((pt, idx) => {
-                const opacity = (idx + 1) / (trailHistory.length + 1) * 0.28;
+                const opacity = ((idx + 1) / (trailHistory.length + 1)) * 0.35;
                 ctx.save();
-                this.setNeonGlow(color, 8);
-                ctx.strokeStyle = color;
                 ctx.globalAlpha = opacity;
-                ctx.lineWidth = 2.5;
-                
-                const ptDirX = Math.cos(pt.angle);
-                const ptDirY = Math.sin(pt.angle);
-                const ptPerpX = -ptDirY;
-                const ptPerpY = ptDirX;
-                
-                // Draw head
-                ctx.beginPath();
-                ctx.arc(pt.x + ptDirX * (radius * 0.5), pt.y + ptDirY * (radius * 0.5), radius * 0.35, 0, Math.PI * 2);
-                ctx.stroke();
-                
-                // Draw torso
-                const ptTorsoTopX = pt.x + ptDirX * (radius * 0.2);
-                const ptTorsoTopY = pt.y + ptDirY * (radius * 0.2);
-                const ptTorsoBottomX = pt.x - ptDirX * (radius * 0.4);
-                const ptTorsoBottomY = pt.y - ptDirY * (radius * 0.4);
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoTopX, ptTorsoTopY);
-                ctx.stroke();
-                
-                // Draw legs
-                ctx.beginPath();
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) - ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) - ptPerpY * (radius * 0.25));
-                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
-                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) + ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) + ptPerpY * (radius * 0.25));
-                ctx.stroke();
-
+                this.setNeonGlow(color, 12);
+                if (spriteCanvas) {
+                    ctx.save();
+                    ctx.translate(pt.x, pt.y);
+                    ctx.rotate(pt.angle + Math.PI / 2);
+                    const trailSize = radius * 2.85;
+                    ctx.drawImage(spriteCanvas, -trailSize / 2, -trailSize / 2, trailSize, trailSize);
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(pt.x, pt.y, radius * 0.85, 0, Math.PI * 2);
+                    ctx.fill();
+                }
                 ctx.restore();
             });
         }
 
+        // 2. Ambient Energy Glow Aura around character base
+        const auraPulse = 1.0 + Math.sin(Date.now() * 0.008) * 0.08;
         ctx.save();
-        
-        // 2. Draw Ki Guard Ring Shield
-        if (inChargingZone && !isAiming) {
-            ctx.save();
-            const pulse = 1.0 + Math.sin(Date.now() * 0.007) * 0.08;
-            this.setNeonGlow(color, 15);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath();
-            ctx.arc(x, y, radius * 1.55 * pulse, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-        }
-
-        // Draw Torso
-        this.setNeonGlow(color, 12);
+        this.setNeonGlow(color, 24);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3.5;
-        ctx.lineCap = 'round';
-        
-        const dirX = Math.cos(angle);
-        const dirY = Math.sin(angle);
-        const perpX = -dirY;
-        const perpY = dirX;
-        
-        const torsoTopX = x + dirX * (radius * 0.2);
-        const torsoTopY = y + dirY * (radius * 0.2);
-        const torsoBottomX = x - dirX * (radius * 0.4);
-        const torsoBottomY = y - dirY * (radius * 0.4);
-        
-        // Torso Line
+        ctx.lineWidth = 2.5;
+        ctx.globalAlpha = 0.6;
         ctx.beginPath();
-        ctx.moveTo(torsoBottomX, torsoBottomY);
-        ctx.lineTo(torsoTopX, torsoTopY);
-        ctx.stroke();
-
-        // 3. Draw Legs (makes it a real stickman!)
-        const leftHipX = torsoBottomX - perpX * (radius * 0.15);
-        const leftHipY = torsoBottomY - perpY * (radius * 0.15);
-        const rightHipX = torsoBottomX + perpX * (radius * 0.15);
-        const rightHipY = torsoBottomY + perpY * (radius * 0.15);
-
-        const leftFootX = leftHipX - dirX * (radius * 0.45) - perpX * (radius * 0.2);
-        const leftFootY = leftHipY - dirY * (radius * 0.45) - perpY * (radius * 0.2);
-        const rightFootX = rightHipX - dirX * (radius * 0.45) + perpX * (radius * 0.2);
-        const rightFootY = rightHipY - dirY * (radius * 0.45) + perpY * (radius * 0.2);
-
-        ctx.beginPath();
-        // Left Leg
-        ctx.moveTo(leftHipX, leftHipY);
-        ctx.lineTo(leftFootX, leftFootY);
-        // Right Leg
-        ctx.moveTo(rightHipX, rightHipY);
-        ctx.lineTo(rightFootX, rightFootY);
-        ctx.stroke();
-        
-        // Draw Shoulders
-        const leftShoulderX = torsoTopX - perpX * (radius * 0.35);
-        const leftShoulderY = torsoTopY - perpY * (radius * 0.35);
-        const rightShoulderX = torsoTopX + perpX * (radius * 0.35);
-        const rightShoulderY = torsoTopY + perpY * (radius * 0.35);
-        
-        ctx.beginPath();
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(rightShoulderX, rightShoulderY);
-        ctx.stroke();
-        
-        // Draw Head
-        const headX = x + dirX * (radius * 0.5);
-        const headY = y + dirY * (radius * 0.5);
-        ctx.fillStyle = '#0f0f1b';
-        ctx.beginPath();
-        ctx.arc(headX, headY, radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Glowing visor slit (Exactly like the cyber-mask on the picture!)
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.0;
-        ctx.beginPath();
-        ctx.moveTo(headX - perpX * (radius * 0.2) + dirX * (radius * 0.1), headY - perpY * (radius * 0.2) + dirY * (radius * 0.1));
-        ctx.lineTo(headX + perpX * (radius * 0.2) + dirX * (radius * 0.1), headY + perpY * (radius * 0.2) + dirY * (radius * 0.1));
+        ctx.arc(x, y, radius * 1.25 * auraPulse, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
-        
-        // 4. Draw flowing cyber-scarf/obi for Cyber Ronin (katana)
-        if (profileKey === 'katana') {
+
+        // Ki Guard Shield Ring if in charging zone
+        if (inChargingZone && !isAiming) {
             ctx.save();
-            this.setNeonGlow(color, 12);
+            const shieldPulse = 1.0 + Math.sin(Date.now() * 0.01) * 0.08;
+            this.setNeonGlow(color, 28);
             ctx.strokeStyle = color;
             ctx.lineWidth = 3.5;
-            ctx.lineCap = 'round';
-            
-            const neckX = x + dirX * (radius * 0.3);
-            const neckY = y + dirY * (radius * 0.3);
-            
-            const waveOffset = Math.sin(Date.now() * 0.012) * 6;
-            const oppositeAngle = angle + Math.PI;
-            
+            ctx.setLineDash([8, 6]);
             ctx.beginPath();
-            ctx.moveTo(neckX, neckY);
-            const midX = neckX + Math.cos(oppositeAngle) * (radius * 0.7) + Math.cos(oppositeAngle + Math.PI/2) * waveOffset;
-            const midY = neckY + Math.sin(oppositeAngle) * (radius * 0.7) + Math.sin(oppositeAngle + Math.PI/2) * waveOffset;
-            const endX = neckX + Math.cos(oppositeAngle) * (radius * 1.4) - Math.cos(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            const endY = neckY + Math.sin(oppositeAngle) * (radius * 1.4) - Math.sin(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
-            
-            ctx.quadraticCurveTo(midX, midY, endX, endY);
+            ctx.arc(x, y, radius * 1.65 * shieldPulse, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
         }
 
-        // Draw Hat/Helmet based on profile
-        this.resetNeonGlow();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        if (profileKey === 'blades') {
-            // Samurai Shogun Helmet (Kabuto)
-            ctx.beginPath();
-            ctx.arc(headX, headY - radius * 0.1, radius * 0.3, Math.PI, 0);
-            ctx.stroke();
-            
-            // Large Golden Crescent Horns
-            ctx.save();
-            this.setNeonGlow('#ffaa00', 10);
-            ctx.strokeStyle = '#ffaa00';
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
-            ctx.arc(headX - radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.35, false);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(headX + radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.65, true);
-            ctx.stroke();
-            ctx.restore();
+        // 3. DRAW REAL MECHA SAMURAI SPRITE GRAPHIC (Matching Screenshot 2!)
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle + Math.PI / 2);
+
+        if (spriteCanvas) {
+            const spriteSize = radius * 2.85;
+            this.setNeonGlow(color, 18);
+            ctx.drawImage(spriteCanvas, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
         } else {
-            // Straw Hat (Ronin / Ninja) - Cyber kasa with glowing neon rim!
-            ctx.fillStyle = '#1b1b22';
+            // Fallback if canvas transparency step is loading
+            const fallbackImg = isCyan ? this.playerSpriteImg : this.enemySpriteImg;
+            if (fallbackImg && fallbackImg.complete) {
+                const spriteSize = radius * 2.85;
+                this.setNeonGlow(color, 18);
+                ctx.drawImage(fallbackImg, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
+            }
+        }
+        ctx.restore();
+
+        // 4. DYNAMIC AIMING SWORD LASER OVERLAY (Only drawn when aiming drag action!)
+        if (isAiming) {
+            ctx.save();
+            const swordAngle = Math.atan2(-aimDy, -aimDx);
+            const handX = x + Math.cos(swordAngle) * (radius * 0.5);
+            const handY = y + Math.sin(swordAngle) * (radius * 0.5);
+
+            const swordLength = radius * 2.2;
+            const swordEndX = handX + Math.cos(swordAngle) * swordLength;
+            const swordEndY = handY + Math.sin(swordAngle) * swordLength;
+
+            // Outer Neon Glow Blade Sheath
+            this.setNeonGlow(color, 24);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + dirX * (radius * 0.35), headY + dirY * (radius * 0.35)); // peak
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.closePath();
-            ctx.fill();
+            ctx.moveTo(handX, handY);
+            ctx.lineTo(swordEndX, swordEndY);
             ctx.stroke();
 
-            // Glowing cyan rim for Ronin hat
-            ctx.save();
-            this.setNeonGlow(color, 10);
-            ctx.strokeStyle = color;
+            // Inner Hot White Core Blade
+            ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Hilt Guard (Tsuba)
+            this.setNeonGlow('#ffcc00', 16);
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 5;
             ctx.beginPath();
-            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
-            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.moveTo(handX - Math.sin(swordAngle) * 7, handY + Math.cos(swordAngle) * 7);
+            ctx.lineTo(handX + Math.sin(swordAngle) * 7, handY - Math.cos(swordAngle) * 7);
             ctx.stroke();
             ctx.restore();
         }
-        
-        // Draw Katana (sword)
-        this.setNeonGlow(color, 16);
-        ctx.strokeStyle = '#ffffff';
-        ctx.shadowColor = color;
-        ctx.lineWidth = 2.5;
-        
-        let swordAngle = angle + Math.PI * 0.25;
-        if (isAiming) {
-            swordAngle = Math.atan2(-aimDy, -aimDx) - Math.PI * 0.15;
-        }
-        
-        const handX = x + perpX * (radius * 0.4);
-        const handY = y + perpY * (radius * 0.4);
-        const swordLength = radius * 1.35;
-        const swordEndX = handX + Math.cos(swordAngle) * swordLength;
-        const swordEndY = handY + Math.sin(swordAngle) * swordLength;
-        
-        ctx.beginPath();
-        ctx.moveTo(handX, handY);
-        ctx.lineTo(swordEndX, swordEndY);
-        ctx.stroke();
-        
-        // Draw Hilt (Tsuba)
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(handX - Math.sin(swordAngle) * 4, handY + Math.cos(swordAngle) * 4);
-        ctx.lineTo(handX + Math.sin(swordAngle) * 4, handY - Math.cos(swordAngle) * 4);
-        ctx.stroke();
 
-        // 5. Draw Arms (connecting shoulders to hands)
-        this.resetNeonGlow();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        // Arm holding the sword
-        ctx.moveTo(leftShoulderX, leftShoulderY);
-        ctx.lineTo(handX, handY);
-        // Free arm in fighting pose
-        const freeHandX = rightShoulderX + dirX * (radius * 0.1) + perpX * (radius * 0.3);
-        const freeHandY = rightShoulderY + dirY * (radius * 0.1) + perpY * (radius * 0.3);
-        ctx.moveTo(rightShoulderX, rightShoulderY);
-        ctx.lineTo(freeHandX, freeHandY);
-        ctx.stroke();
-        
-        // Draw simple health bar above head
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(x - 20, y - radius - 15, 40, 4);
+        // 5. Futuristic Floating Health Bar
+        const barW = Math.max(54, radius * 1.6);
+        const barH = 6;
+        const barY = y - radius - 24;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(x - barW / 2, barY, barW, barH);
+
+        this.setNeonGlow(color, 10);
         ctx.fillStyle = color;
-        ctx.fillRect(x - 20, y - radius - 15, hpPercent * 40, 4);
-        
+        ctx.fillRect(x - barW / 2, barY, Math.max(0, hpPercent * barW), barH);
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(x - barW / 2, barY, barW, barH);
+
         ctx.restore();
     }
 }
