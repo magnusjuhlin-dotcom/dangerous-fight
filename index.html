@@ -41,7 +41,7 @@
             <!-- Cars Health & Energy Overlay -->
             <div class="car-status-container">
                 <div class="car-stat-box bottom-car-stat">
-                    <div class="mini-label">BIL-HP: <span id="player-car-hp-text">100</span></div>
+                    <div class="mini-label">SAMURAJ-HP: <span id="player-car-hp-text">100</span></div>
                     <div id="player-car-charge" class="charge-lights">
                         <div class="light"></div>
                         <div class="light"></div>
@@ -54,10 +54,10 @@
             </div>
 
             <!-- Contextual Touch Helper for Mobile -->
-            <div class="touch-hint">Dra på din bil för att skjuta iväg den | Ladda i din zon längst ner</div>
+            <div class="touch-hint">Dra i din samuraj för att göra en svärds-dash | Ladda i din zon längst ner</div>
             
             <!-- Floating shoot button for bottom player -->
-            <button id="shoot-btn" class="btn-shoot neon-btn-cyan">SKJUT ⚡</button>
+            <button id="shoot-btn" class="btn-shoot neon-btn-cyan">SVÄRDSVÅG ⚡</button>
         </div>
 
         <!-- MAIN MENU OVERLAY -->
@@ -68,8 +68,8 @@
             <div class="menu-buttons">
                 <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
                 <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
-                <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">BIL-GARAGE</button>
-                <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">KANON-BUTIK</button>
+                <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">SAMURAI-DOJO</button>
+                <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">SVÄRDSVÅG-BUTIK</button>
                 <button id="btn-upgrades" class="btn btn-secondary neon-btn-green">UPPGRADERINGAR</button>
             </div>
             
@@ -109,41 +109,41 @@
 
         <!-- VEHICLE GARAGE (FORMER WEAPON ARSENAL) -->
         <div id="weapons-menu" class="overlay-screen hidden">
-            <h2>BIL-GARAGE</h2>
-            <p class="section-desc">Välj din spelpjäs. Lås upp med Cyber-Credits ⚡</p>
+            <h2>SAMURAI-DOJO</h2>
+            <p class="section-desc">Välj din krigare. Lås upp med Cyber-Credits ⚡</p>
             
             <div class="weapons-grid">
-                <!-- Cyber Car -->
+                <!-- Cyber Ronin -->
                 <div class="weapon-card selected" id="wpn-katana" data-weapon="katana">
                     <div class="weapon-glow cyan"></div>
-                    <h3>CYBER CAR (Standard)</h3>
+                    <h3>CYBER RONIN (Medium)</h3>
                     <div class="weapon-stats">
                         <div class="stat-row">HP / Vikt: <span>Medel</span></div>
-                        <div class="stat-row">Ramm-Skada: <span>100</span></div>
+                        <div class="stat-row">Hugg-Skada: <span>100</span></div>
                         <div class="stat-row">Fart: <span>Medel</span></div>
                     </div>
                     <div class="weapon-cost">UPPLÅST</div>
                 </div>
 
-                <!-- Plasma Truck -->
+                <!-- Armored Shogun -->
                 <div class="weapon-card locked" id="wpn-blades" data-weapon="blades">
                     <div class="weapon-glow pink"></div>
-                    <h3>PLASMA TRUCK (Tung)</h3>
+                    <h3>ARMORED SHOGUN (Tung)</h3>
                     <div class="weapon-stats">
                         <div class="stat-row">HP / Vikt: <span>Hög (Trögstyrd)</span></div>
-                        <div class="stat-row">Ramm-Skada: <span>180</span></div>
+                        <div class="stat-row">Hugg-Skada: <span>180</span></div>
                         <div class="stat-row">Fart: <span>Långsam</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 100</div>
                 </div>
 
-                <!-- Laser Cycle -->
+                <!-- Shadow Ninja -->
                 <div class="weapon-card locked" id="wpn-hammer" data-weapon="hammer">
                     <div class="weapon-glow orange"></div>
-                    <h3>LASER CYCLE (Snabb)</h3>
+                    <h3>SHADOW NINJA (Snabb)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">HP / Vikt: <span>Låg (Mycket lätt)</span></div>
-                        <div class="stat-row">Ramm-Skada: <span>70</span></div>
+                        <div class="stat-row">HP / Vikt: <span>Låg (Lättstyrd)</span></div>
+                        <div class="stat-row">Hugg-Skada: <span>70</span></div>
                         <div class="stat-row">Fart: <span>Extrem</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 250</div>
@@ -156,19 +156,19 @@
 
         <!-- CANNON SHOP OVERLAY -->
         <div id="cannons-menu" class="overlay-screen hidden">
-            <h2>LASERKANON-BUTIK</h2>
-            <p class="section-desc">Köp och utrusta olika laserkanoner till din bil. Lås upp med Credits ⚡</p>
+            <h2>SVÄRDSVÅG-BUTIK</h2>
+            <p class="section-desc">Köp och utrusta olika svärdsvågs-tekniker till din samuraj. Lås upp med Credits ⚡</p>
             
             <div class="weapons-grid">
                 <!-- Puls Laser -->
                 <div class="weapon-card selected" id="cnn-laser" data-cannon="laser">
                     <div class="weapon-glow cyan"></div>
-                    <h3>PULS-LASER (Standard)</h3>
+                    <h3>PULS-SLASH (Standard)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>25 / 50</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Hög</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Standard (8px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>Enkel laserpuls</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>25 / 50</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Hög</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Standard (8px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>Enkel svärdsvåg</span></div>
                     </div>
                     <div class="weapon-cost">UPPLÅST</div>
                 </div>
@@ -176,12 +176,12 @@
                 <!-- Mega Laser -->
                 <div class="weapon-card locked" id="cnn-plasma" data-cannon="plasma">
                     <div class="weapon-glow pink"></div>
-                    <h3>MEGA-LASER (Tung)</h3>
+                    <h3>MEGA-SLASH (Tung)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>50 / 110</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Långsam</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Stor (16px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>Tung laserladdning</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>50 / 110</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Långsam</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Stor (16px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>Tung energiladdad våg</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 150</div>
                 </div>
@@ -189,12 +189,12 @@
                 <!-- Dubbel Laser -->
                 <div class="weapon-card locked" id="cnn-rapid" data-cannon="rapid">
                     <div class="weapon-glow green"></div>
-                    <h3>DUBBEL-LASER (Dubbelskott)</h3>
+                    <h3>DUBBEL-SLASH (Dubbelskott)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>15 / 30 per skott</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Mycket snabb</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Mindre (6px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>Två parallella laserstrålar</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>15 / 30 per våg</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Mycket snabb</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Mindre (6px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>Två parallella svärdsvågor</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 200</div>
                 </div>
@@ -202,12 +202,12 @@
                 <!-- Trio Laser -->
                 <div class="weapon-card locked" id="cnn-trio" data-cannon="trio">
                     <div class="weapon-glow orange"></div>
-                    <h3>TRIO-LASER (Spridning)</h3>
+                    <h3>TRIO-SLASH (Spridning)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>15 / 30 per skott</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Medel</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Liten (7px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>Tredelad laserstråle</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>15 / 30 per våg</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Medel</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Liten (7px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>Tredelad spridningsvåg</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 300</div>
                 </div>
@@ -215,12 +215,12 @@
                 <!-- Hagel Laser -->
                 <div class="weapon-card locked" id="cnn-hagel" data-cannon="hagel">
                     <div class="weapon-glow cyan"></div>
-                    <h3>HAGEL-LASER (Sprideld)</h3>
+                    <h3>HAGEL-SLASH (Sprideld)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>10 / 20 per skott</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Snabb</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Liten (5px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>5 strålar bred spridning</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>10 / 20 per våg</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Snabb</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Liten (5px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>5 vågor i bred spridning</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 350</div>
                 </div>
@@ -228,25 +228,25 @@
                 <!-- Sniper Laser -->
                 <div class="weapon-card locked" id="cnn-sniper" data-cannon="sniper">
                     <div class="weapon-glow pink"></div>
-                    <h3>SNIPER-LASER (Precisions)</h3>
+                    <h3>SNIPER-SLASH (Precision)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>80 / 160</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Extremt snabb</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Smal (4px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>En kraftfull precisionsstråle</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>80 / 160</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Extremt snabb</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Smal (4px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>En kraftfull precisionsstråle</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 450</div>
                 </div>
 
-                <!-- Bakåt Laser -->
+                <!-- Backwards Laser (Bakåt Laser) -->
                 <div class="weapon-card locked" id="cnn-bakåt" data-cannon="bakåt">
                     <div class="weapon-glow green"></div>
-                    <h3>BAKÅT-LASER (Dubbelriktad)</h3>
+                    <h3>BAKÅT-SLASH (Dubbelriktad)</h3>
                     <div class="weapon-stats">
-                        <div class="stat-row">Skada Bil / Torn: <span>20 / 40 per skott</span></div>
-                        <div class="stat-row">Skotthastighet: <span>Hög</span></div>
-                        <div class="stat-row">Skottstorlek: <span>Standard (8px)</span></div>
-                        <div class="stat-row">Skottmönster: <span>Skjuter uppåt OCH nedåt</span></div>
+                        <div class="stat-row">Skada Fiende / Torn: <span>20 / 40 per våg</span></div>
+                        <div class="stat-row">Hugg-hastighet: <span>Hög</span></div>
+                        <div class="stat-row">Vågstorlek: <span>Standard (8px)</span></div>
+                        <div class="stat-row">Vågmönster: <span>Svärdsvåg framåt OCH bakåt</span></div>
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 500</div>
                 </div>
@@ -303,6 +303,16 @@
             <button id="btn-upgrades-back" class="btn btn-secondary back-btn">TILLBAKA</button>
         </div>
 
+        <!-- PERK SELECTION OVERLAY -->
+        <div id="perk-selection-screen" class="overlay-screen hidden">
+            <h1 class="glitch-title" data-text="CYBER-PERK DETEKTERAD">VÄLJ CYBER-PERK</h1>
+            <p class="subtitle cyan">Installera en tillfällig uppgradering för denna strid</p>
+            
+            <div class="weapons-grid" id="perks-selection-grid">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
         <!-- GAME OVER / DEFEAT OVERLAY -->
         <div id="game-over-screen" class="overlay-screen hidden">
             <h1 class="neon-text-red glitch-title" data-text="SYSTEM DEFEAT">STRID FÖRLORAD</h1>
@@ -336,6 +346,6 @@
         </div>
     </div>
     <!-- Core Game Scripts loaded as ES6 modules -->
-    <script src="src/bundle.js?v=2"></script>
+    <script src="src/bundle.js?v=16"></script>
 </body>
 </html>

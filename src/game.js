@@ -34,6 +34,7 @@ class Game {
         this.isHardBossRound = false;
         this.bossWarningTimeout = null;
         this.lastTime = 0;
+        this.slowMoTimer = 0;
         
         // Multiplayer WebRTC state
         this.isMultiplayer = false;
@@ -453,6 +454,7 @@ class Game {
         this.runCredits = 0;
         this.particles.clear();
         this.projectiles = [];
+        this.slowMoTimer = 0; // reset slow motion
         
         let isBoss = false;
         if (!this.isMultiplayer) {
@@ -477,16 +479,48 @@ class Game {
         this.player.resetForRun();
         this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
         
+        // Settle active weapon on player
+        this.player.activeWeaponKey = this.upgradeMgr.state.equippedWeapon || 'katana';
+        
         // Reset enemy car
         this.enemy.resetForRun(isBoss);
         
-        this.gameState = 'playing';
-        this.uiCtrl.showScreen('hud');
-        
-        // Manage HUD boss warning banner overlay
+        // Offer cybernetic perks in single-player before entering battle
+        if (!this.isMultiplayer) {
+            const randomPerks = this.upgradeMgr.getRandomPerks();
+            this.uiCtrl.showScreen('perks');
+            this.uiCtrl.renderPerkSelection(randomPerks, (perkKey) => {
+                this.player.activePerk = perkKey;
+                if (perkKey === 'shieldCharge') {
+                    this.player.shieldHp = 1;
+                    this.player.shieldCooldown = 0;
+                }
+                
+                // Complete game start after perk choice
+                this.gameState = 'playing';
+                this.uiCtrl.showScreen('hud');
+                
+                // Manage HUD boss warning banner overlay
+                this.showBossWarningBanner(isBoss);
+                
+                // Play epic bass voice intro and start background music!
+                this.audioSynth.playVoiceIntro(isBoss);
+                this.audioSynth.startMusic();
+            }, this.audioSynth);
+        } else {
+            // Multiplayer starts instantly (symmetrical gameplay without active perks)
+            this.gameState = 'playing';
+            this.uiCtrl.showScreen('hud');
+            this.audioSynth.playVoiceIntro(false);
+            this.audioSynth.startMusic();
+        }
+    }
+
+    showBossWarningBanner(isBoss) {
         const warningBanner = document.getElementById('boss-warning');
         if (warningBanner) {
             if (isBoss) {
+                warningBanner.innerText = "VARNING: SHOGUN DETEKTERAD! 💀";
                 warningBanner.classList.remove('hidden');
                 if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
                 this.bossWarningTimeout = setTimeout(() => {
@@ -500,10 +534,6 @@ class Game {
                 }
             }
         }
-        
-        // Play epic bass voice intro and start background music!
-        this.audioSynth.playVoiceIntro(isBoss);
-        this.audioSynth.startMusic();
     }
 
     // Projectile Spawner
@@ -590,16 +620,29 @@ class Game {
             return;
         }
 
+        // Handle slow-motion time dilation
+        let enemyDt = dt;
+        let physicsDt = dt;
+        if (this.slowMoTimer > 0) {
+            this.slowMoTimer -= dt;
+            enemyDt = dt * 0.40;
+            physicsDt = dt * 0.40;
+            // Ambient slow-mo neon pulse
+            if (Math.random() < 0.08) {
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.05)', 80);
+            }
+        }
+
         // Update systems
-        this.canvasCtrl.update(dt);
+        this.canvasCtrl.update(dt, this.player);
         this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
         this.particles.update(dt);
         
         this.player.update(dt, this.canvasCtrl.width, this.canvasCtrl.height, this.particles);
-        this.enemy.update(dt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+        this.enemy.update(enemyDt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
         
-        this.updatePhysics(dt);
-        this.checkCollisions(dt);
+        this.updatePhysics(physicsDt);
+        this.checkCollisions(physicsDt);
         
         // Network Sync
         if (this.isMultiplayer) {
@@ -749,6 +792,7 @@ class Game {
                 // Damage top tower
                 this.topTower.hp = Math.max(0, this.topTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
                 this.projectiles.splice(i, 1);
@@ -758,6 +802,7 @@ class Game {
                 // Damage bottom tower
                 this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
                 this.projectiles.splice(i, 1);
@@ -765,16 +810,63 @@ class Game {
                 continue;
             }
             
-            // Check car hits
+            // Check samurai/enemy hits
             if (this.player.state !== 'dead' && Math.hypot(p.x - this.player.x, p.y - this.player.y) < this.player.radius + p.radius) {
+                // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
+                if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
+                    this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
+                    this.canvasCtrl.shake(7, 120);
+                    this.audioSynth.playParry();
+                    
+                    // Vampirism Perk Heal
+                    if (this.player.activePerk === 'vampirism') {
+                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.floor(this.player.maxHp * 0.08));
+                    }
+                    
+                    // Time Dilation slow motion perk
+                    if (this.player.activePerk === 'timeDilation') {
+                        this.slowMoTimer = 2500;
+                    }
+                    
+                    // Deflect the projectile (reverse direction and transfer ownership to player!)
+                    p.owner = 'player';
+                    p.vx = -p.vx * 1.25;
+                    p.vy = -p.vy * 1.25;
+                    p.color = '#00f0ff'; // change laser color to player cyan!
+                    
+                    continue;
+                }
+                
                 this.player.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
                 this.projectiles.splice(i, 1);
                 continue;
             }
-            if (this.enemy.state !== 'dead' && Math.hypot(p.x - this.enemy.x, p.y - this.enemy.y) < this.enemy.radius + p.radius) {
-                this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
-                this.projectiles.splice(i, 1);
-                continue;
+            if (this.enemy.state !== 'dead') {
+                let hitEnemy = false;
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                        const node = this.enemy.ragdollNodes[n];
+                        if (Math.hypot(p.x - node.x, p.y - node.y) < node.radius + p.radius) {
+                            hitEnemy = true;
+                            // Push the node slightly when hit by projectile
+                            const angle = Math.atan2(node.y - p.y, node.x - p.x);
+                            node.vx += Math.cos(angle) * 0.05;
+                            node.vy += Math.sin(angle) * 0.05;
+                            break;
+                        }
+                    }
+                } else {
+                    if (Math.hypot(p.x - this.enemy.x, p.y - this.enemy.y) < this.enemy.radius + p.radius) {
+                        hitEnemy = true;
+                    }
+                }
+
+                if (hitEnemy) {
+                    this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
+                    this.projectiles.splice(i, 1);
+                    continue;
+                }
             }
         }
     }
@@ -785,49 +877,83 @@ class Game {
         const w = this.canvasCtrl.width;
         const h = this.canvasCtrl.height;
 
-        // --- 1. CAR-TO-CAR ELASTIC COLLISION ---
-        const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
-        const touchDist = this.player.radius + this.enemy.radius;
-        
-        if (dist < touchDist) {
-            // Push apart
-            const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
-            const overlap = touchDist - dist;
-            
-            this.player.x += Math.cos(angle) * overlap * 0.5;
-            this.player.y += Math.sin(angle) * overlap * 0.5;
-            this.enemy.x -= Math.cos(angle) * overlap * 0.5;
-            this.enemy.y -= Math.sin(angle) * overlap * 0.5;
-
-            // Elastic bounce momentum calculations
-            const normalX = Math.cos(angle);
-            const normalY = Math.sin(angle);
-            
-            // Relative velocity
-            const rvx = this.player.vx - this.enemy.vx;
-            const rvy = this.player.vy - this.enemy.vy;
-            
-            // Velocity along normal
-            const velAlongNormal = rvx * normalX + rvy * normalY;
-            
-            if (velAlongNormal < 0) {
-                const restitution = 0.85;
-                let impulseScalar = -(1 + restitution) * velAlongNormal;
-                impulseScalar /= (1 / this.player.mass) + (1 / this.enemy.mass);
+        // --- 1. SAMURAI-TO-SAMURAI ELASTIC COLLISION ---
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            this.enemy.ragdollNodes.forEach(node => {
+                const dist = Math.hypot(this.player.x - node.x, this.player.y - node.y);
+                const touchDist = this.player.radius + node.radius;
                 
-                // Apply impulse
-                this.player.vx += (impulseScalar / this.player.mass) * normalX;
-                this.player.vy += (impulseScalar / this.player.mass) * normalY;
-                this.enemy.vx -= (impulseScalar / this.enemy.mass) * normalX;
-                this.enemy.vy -= (impulseScalar / this.enemy.mass) * normalY;
-            }
+                if (dist < touchDist) {
+                    const angle = Math.atan2(this.player.y - node.y, this.player.x - node.x);
+                    const overlap = touchDist - dist;
+                    
+                    this.player.x += Math.cos(angle) * overlap * 0.5;
+                    this.player.y += Math.sin(angle) * overlap * 0.5;
+                    node.x -= Math.cos(angle) * overlap * 0.5;
+                    node.y -= Math.sin(angle) * overlap * 0.5;
+
+                    const normalX = Math.cos(angle);
+                    const normalY = Math.sin(angle);
+                    
+                    const rvx = this.player.vx - node.vx;
+                    const rvy = this.player.vy - node.vy;
+                    const velAlongNormal = rvx * normalX + rvy * normalY;
+                    
+                    if (velAlongNormal < 0) {
+                        const restitution = 0.85;
+                        let impulseScalar = -(1 + restitution) * velAlongNormal;
+                        impulseScalar /= (1 / this.player.mass) + (1 / node.mass);
+                        
+                        this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                        this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                        node.vx -= (impulseScalar / node.mass) * normalX;
+                        node.vy -= (impulseScalar / node.mass) * normalY;
+                    }
+                    
+                    this.audioSynth.playClash();
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
+                }
+            });
+        } else {
+            const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
+            const touchDist = this.player.radius + this.enemy.radius;
             
-            this.audioSynth.playClash();
-            this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
+            if (dist < touchDist) {
+                const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
+                const overlap = touchDist - dist;
+                
+                this.player.x += Math.cos(angle) * overlap * 0.5;
+                this.player.y += Math.sin(angle) * overlap * 0.5;
+                this.enemy.x -= Math.cos(angle) * overlap * 0.5;
+                this.enemy.y -= Math.sin(angle) * overlap * 0.5;
+
+                const normalX = Math.cos(angle);
+                const normalY = Math.sin(angle);
+                
+                const rvx = this.player.vx - this.enemy.vx;
+                const rvy = this.player.vy - this.enemy.vy;
+                const velAlongNormal = rvx * normalX + rvy * normalY;
+                
+                if (velAlongNormal < 0) {
+                    const restitution = 0.85;
+                    let impulseScalar = -(1 + restitution) * velAlongNormal;
+                    impulseScalar /= (1 / this.player.mass) + (1 / this.enemy.mass);
+                    
+                    this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                    this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                    this.enemy.vx -= (impulseScalar / this.enemy.mass) * normalX;
+                    this.enemy.vy -= (impulseScalar / this.enemy.mass) * normalY;
+                }
+                
+                this.audioSynth.playClash();
+                this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
+            }
         }
 
         // --- 2. TOWER RAMMING COLLISION ---
-        // Player car hitting top tower (enemy)
+        // Player samurai hitting top tower (enemy)
         if (this.player.y < 85) {
             let hitTopTower = false;
             if (this.isHardBossRound) {
@@ -845,18 +971,16 @@ class Game {
             if (hitTopTower) {
                 const impactForce = Math.abs(this.player.vy);
                 if (impactForce > 0.05) {
-                    // RAM damage scaling by player car mass
                     const ramDmg = this.player.profile.ramDamage;
                     this.topTower.hp = Math.max(0, this.topTower.hp - ramDmg);
                     
-                    // Push player back (recoil)
-                    this.player.vy = 0.28; // bounce down
+                    this.player.vy = 0.28;
                     this.player.y = 88;
                     
-                    // Deal recoil damage to player car itself
                     this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
                     
                     this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
                     this.canvasCtrl.shake(14, 300);
                     this.audioSynth.playHit();
                     
@@ -865,29 +989,53 @@ class Game {
             }
         }
 
-        // Enemy car hitting bottom tower (player)
-        if (this.enemy.y > h - 85) {
-            const hitBottomTower = (this.enemy.x + this.enemy.radius >= w / 2 - 80 && this.enemy.x - this.enemy.radius <= w / 2 + 80);
-            if (hitBottomTower) {
-                const impactForce = Math.abs(this.enemy.vy);
-                if (impactForce > 0.05) {
-                    // RAM damage
-                    const ramDmg = this.enemy.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100;
-                    this.bottomTower.hp = Math.max(0, this.bottomTower.hp - ramDmg);
-                    
-                    // Push enemy back (recoil)
-                    this.enemy.vy = -0.28; // bounce up
-                    this.enemy.y = h - 88;
-                    
-                    // Recoil damage to enemy car
-                    this.enemy.takeDamage(30, this.enemy.x, h - 70, this.particles, this.canvasCtrl);
-                    
-                    this.particles.spawnShockwave(this.enemy.x, h - 85, this.enemy.color, 80);
-                    this.canvasCtrl.shake(14, 300);
-                    this.audioSynth.playHit();
-                    
-                    this.checkWinCondition();
+        // Enemy samurai hitting bottom tower (player)
+        let hitBottomTower = false;
+        let hittingNode = this.enemy;
+        
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                const node = this.enemy.ragdollNodes[n];
+                if (node.y + node.radius > h - 85) {
+                    if (node.x + node.radius >= w / 2 - 80 && node.x - node.radius <= w / 2 + 80) {
+                        hitBottomTower = true;
+                        hittingNode = node;
+                        break;
+                    }
                 }
+            }
+        } else {
+            if (this.enemy.y + this.enemy.radius > h - 85) {
+                if (this.enemy.x + this.enemy.radius >= w / 2 - 80 && this.enemy.x - this.enemy.radius <= w / 2 + 80) {
+                    hitBottomTower = true;
+                }
+            }
+        }
+
+        if (hitBottomTower) {
+            const impactForce = Math.abs(hittingNode.vy);
+            if (impactForce > 0.05) {
+                const ramDmg = this.enemy.isBoss ? 150 : (this.enemy.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100);
+                this.bottomTower.hp = Math.max(0, this.bottomTower.hp - ramDmg);
+                
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    this.enemy.ragdollNodes.forEach(node => {
+                        node.vy = -0.28;
+                        node.y -= 10;
+                    });
+                } else {
+                    this.enemy.vy = -0.28;
+                    this.enemy.y = h - 88;
+                }
+                
+                this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
+                
+                this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
+                this.canvasCtrl.shake(14, 300);
+                this.audioSynth.playHit();
+                
+                this.checkWinCondition();
             }
         }
     }

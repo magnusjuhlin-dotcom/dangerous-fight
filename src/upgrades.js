@@ -224,6 +224,27 @@ export class UpgradeManager {
                 icon: '💥',
                 desc: 'Gör 30% mer skada med dina slag, men du tar 10% mer skada själv.',
                 color: 'orange-card'
+            },
+            {
+                key: 'timeDilation',
+                title: 'TIDSSAKTNAD',
+                icon: '⏳',
+                desc: 'En perfekt parering (kollision med skott under dash) saktar ner tiden i 2.5 sek.',
+                color: 'green-card'
+            },
+            {
+                key: 'critSlash',
+                title: 'KRITISKT HUGG',
+                icon: '🎯',
+                desc: '20% chans att ditt dash-hugg eller din svärdsvåg gör 100% mer skada.',
+                color: 'cyan-card'
+            },
+            {
+                key: 'towerRepair',
+                title: 'TORN-REPARATION',
+                icon: '🛠️',
+                desc: 'Att stå still i laddningszonen reparerar långsamt ditt torn (+5 HP/sek).',
+                color: 'green-card'
             }
         ];
 

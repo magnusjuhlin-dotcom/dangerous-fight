@@ -707,6 +707,13 @@ class CanvasController {
         this.shakeX = 0;
         this.shakeY = 0;
         
+        // Grid Parallax & Screen Flash variables
+        this.gridOffsetX = 0;
+        this.gridOffsetY = 0;
+        this.flashTime = 0;
+        this.flashMaxTime = 0;
+        this.flashColor = '#ffffff';
+        
         this.resize();
         window.addEventListener('resize', () => this.resize());
     }
@@ -738,8 +745,8 @@ class CanvasController {
         this.shakeTime = duration;
     }
 
-    // Update screen shake offsets over time
-    update(deltaTime) {
+    // Update screen shake offsets, grid scrolling, and screen flash timers
+    update(deltaTime, player = null) {
         if (this.shakeTime > 0) {
             this.shakeTime -= deltaTime;
             
@@ -750,6 +757,24 @@ class CanvasController {
         } else {
             this.shakeX = 0;
             this.shakeY = 0;
+        }
+
+        // Scroll the grid based on time and player velocity
+        let speedX = 0;
+        let speedY = 0.015; // slow ambient downward drift
+        
+        if (player && player.state !== 'dead') {
+            // Parallax scroll opposite to player's movement
+            speedX = player.vx * 0.12;
+            speedY += player.vy * 0.12;
+        }
+        
+        this.gridOffsetX = (this.gridOffsetX - speedX * deltaTime) % 240;
+        this.gridOffsetY = (this.gridOffsetY - speedY * deltaTime) % 240;
+
+        // Fade active screen flashes
+        if (this.flashTime > 0) {
+            this.flashTime = Math.max(0, this.flashTime - deltaTime);
         }
     }
 
@@ -766,6 +791,13 @@ class CanvasController {
         this.ctx.restore();
     }
 
+    // Trigger screen-flash effect
+    flash(color, duration) {
+        this.flashColor = color;
+        this.flashTime = duration;
+        this.flashMaxTime = duration;
+    }
+
     // Clear screen with custom background trails (creates amazing motion blur)
     clear(opacity = 0.25) {
         // Clear with a slight transparency to let neon trails fade beautifully
@@ -774,22 +806,62 @@ class CanvasController {
         
         // Subtle futuristic grid lines background
         this.drawGrid();
+
+        // Render full screen flash overlay if active
+        if (this.flashTime > 0) {
+            this.ctx.save();
+            const alpha = (this.flashTime / this.flashMaxTime) * 0.18; // cap max opacity to prevent blinding
+            this.ctx.fillStyle = this.flashColor;
+            this.ctx.globalAlpha = alpha;
+            this.ctx.fillRect(0, 0, this.width, this.height);
+            this.ctx.restore();
+        }
     }
 
-    // Ambient cyberpunk background grid
+    // Ambient dual-layer cyberpunk parallax background grid
     drawGrid() {
-        const gridSpacing = 60;
-        this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.02)';
+        // --- Layer 1: Background Grid (Faint, slow-scrolling, wide spacing) ---
+        const spacingBg = 80;
+        this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.012)';
         this.ctx.lineWidth = 1;
         
-        for (let x = 0; x < this.width; x += gridSpacing) {
+        const scrollBgX = (this.gridOffsetX * 0.4) % spacingBg;
+        const scrollBgY = (this.gridOffsetY * 0.4) % spacingBg;
+        
+        const startBgX = scrollBgX < 0 ? scrollBgX + spacingBg : scrollBgX;
+        for (let x = startBgX - spacingBg; x < this.width + spacingBg; x += spacingBg) {
             this.ctx.beginPath();
             this.ctx.moveTo(x, 0);
             this.ctx.lineTo(x, this.height);
             this.ctx.stroke();
         }
         
-        for (let y = 0; y < this.height; y += gridSpacing) {
+        const startBgY = scrollBgY < 0 ? scrollBgY + spacingBg : scrollBgY;
+        for (let y = startBgY - spacingBg; y < this.height + spacingBg; y += spacingBg) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, y);
+            this.ctx.lineTo(this.width, y);
+            this.ctx.stroke();
+        }
+
+        // --- Layer 2: Foreground Grid (Brighter, fast-scrolling, narrow spacing) ---
+        const spacingFg = 40;
+        this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.032)';
+        this.ctx.lineWidth = 1.5;
+        
+        const scrollFgX = this.gridOffsetX % spacingFg;
+        const scrollFgY = this.gridOffsetY % spacingFg;
+        
+        const startFgX = scrollFgX < 0 ? scrollFgX + spacingFg : scrollFgX;
+        for (let x = startFgX - spacingFg; x < this.width + spacingFg; x += spacingFg) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, 0);
+            this.ctx.lineTo(x, this.height);
+            this.ctx.stroke();
+        }
+        
+        const startFgY = scrollFgY < 0 ? scrollFgY + spacingFg : scrollFgY;
+        for (let y = startFgY - spacingFg; y < this.height + spacingFg; y += spacingFg) {
             this.ctx.beginPath();
             this.ctx.moveTo(0, y);
             this.ctx.lineTo(this.width, y);
@@ -867,6 +939,262 @@ class CanvasController {
         
         this.ctx.stroke();
         this.ctx.restore();
+    }
+
+    drawSamuraiCharacter(ctx, x, y, radius, color, angle, profileKey, isAiming, aimDx, aimDy, hpPercent, trailHistory = [], inChargingZone = false) {
+        // 1. Draw ghost trails (afterimages) if Ninja (hammer) or moving fast
+        if (trailHistory && trailHistory.length > 0) {
+            trailHistory.forEach((pt, idx) => {
+                const opacity = (idx + 1) / (trailHistory.length + 1) * 0.28;
+                ctx.save();
+                this.setNeonGlow(color, 8);
+                ctx.strokeStyle = color;
+                ctx.globalAlpha = opacity;
+                ctx.lineWidth = 2.5;
+                
+                const ptDirX = Math.cos(pt.angle);
+                const ptDirY = Math.sin(pt.angle);
+                const ptPerpX = -ptDirY;
+                const ptPerpY = ptDirX;
+                
+                // Draw head
+                ctx.beginPath();
+                ctx.arc(pt.x + ptDirX * (radius * 0.5), pt.y + ptDirY * (radius * 0.5), radius * 0.35, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                // Draw torso
+                const ptTorsoTopX = pt.x + ptDirX * (radius * 0.2);
+                const ptTorsoTopY = pt.y + ptDirY * (radius * 0.2);
+                const ptTorsoBottomX = pt.x - ptDirX * (radius * 0.4);
+                const ptTorsoBottomY = pt.y - ptDirY * (radius * 0.4);
+                ctx.beginPath();
+                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
+                ctx.lineTo(ptTorsoTopX, ptTorsoTopY);
+                ctx.stroke();
+                
+                // Draw legs
+                ctx.beginPath();
+                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
+                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) - ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) - ptPerpY * (radius * 0.25));
+                ctx.moveTo(ptTorsoBottomX, ptTorsoBottomY);
+                ctx.lineTo(ptTorsoBottomX - ptDirX * (radius * 0.4) + ptPerpX * (radius * 0.25), ptTorsoBottomY - ptDirY * (radius * 0.4) + ptPerpY * (radius * 0.25));
+                ctx.stroke();
+
+                ctx.restore();
+            });
+        }
+
+        ctx.save();
+        
+        // 2. Draw Ki Guard Ring Shield
+        if (inChargingZone && !isAiming) {
+            ctx.save();
+            const pulse = 1.0 + Math.sin(Date.now() * 0.007) * 0.08;
+            this.setNeonGlow(color, 15);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.arc(x, y, radius * 1.55 * pulse, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Draw Torso
+        this.setNeonGlow(color, 12);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        
+        const dirX = Math.cos(angle);
+        const dirY = Math.sin(angle);
+        const perpX = -dirY;
+        const perpY = dirX;
+        
+        const torsoTopX = x + dirX * (radius * 0.2);
+        const torsoTopY = y + dirY * (radius * 0.2);
+        const torsoBottomX = x - dirX * (radius * 0.4);
+        const torsoBottomY = y - dirY * (radius * 0.4);
+        
+        // Torso Line
+        ctx.beginPath();
+        ctx.moveTo(torsoBottomX, torsoBottomY);
+        ctx.lineTo(torsoTopX, torsoTopY);
+        ctx.stroke();
+
+        // 3. Draw Legs (makes it a real stickman!)
+        const leftHipX = torsoBottomX - perpX * (radius * 0.15);
+        const leftHipY = torsoBottomY - perpY * (radius * 0.15);
+        const rightHipX = torsoBottomX + perpX * (radius * 0.15);
+        const rightHipY = torsoBottomY + perpY * (radius * 0.15);
+
+        const leftFootX = leftHipX - dirX * (radius * 0.45) - perpX * (radius * 0.2);
+        const leftFootY = leftHipY - dirY * (radius * 0.45) - perpY * (radius * 0.2);
+        const rightFootX = rightHipX - dirX * (radius * 0.45) + perpX * (radius * 0.2);
+        const rightFootY = rightHipY - dirY * (radius * 0.45) + perpY * (radius * 0.2);
+
+        ctx.beginPath();
+        // Left Leg
+        ctx.moveTo(leftHipX, leftHipY);
+        ctx.lineTo(leftFootX, leftFootY);
+        // Right Leg
+        ctx.moveTo(rightHipX, rightHipY);
+        ctx.lineTo(rightFootX, rightFootY);
+        ctx.stroke();
+        
+        // Draw Shoulders
+        const leftShoulderX = torsoTopX - perpX * (radius * 0.35);
+        const leftShoulderY = torsoTopY - perpY * (radius * 0.35);
+        const rightShoulderX = torsoTopX + perpX * (radius * 0.35);
+        const rightShoulderY = torsoTopY + perpY * (radius * 0.35);
+        
+        ctx.beginPath();
+        ctx.moveTo(leftShoulderX, leftShoulderY);
+        ctx.lineTo(rightShoulderX, rightShoulderY);
+        ctx.stroke();
+        
+        // Draw Head
+        const headX = x + dirX * (radius * 0.5);
+        const headY = y + dirY * (radius * 0.5);
+        ctx.fillStyle = '#0f0f1b';
+        ctx.beginPath();
+        ctx.arc(headX, headY, radius * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Glowing visor slit (Exactly like the cyber-mask on the picture!)
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        ctx.moveTo(headX - perpX * (radius * 0.2) + dirX * (radius * 0.1), headY - perpY * (radius * 0.2) + dirY * (radius * 0.1));
+        ctx.lineTo(headX + perpX * (radius * 0.2) + dirX * (radius * 0.1), headY + perpY * (radius * 0.2) + dirY * (radius * 0.1));
+        ctx.stroke();
+        ctx.restore();
+        
+        // 4. Draw flowing cyber-scarf/obi for Cyber Ronin (katana)
+        if (profileKey === 'katana') {
+            ctx.save();
+            this.setNeonGlow(color, 12);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3.5;
+            ctx.lineCap = 'round';
+            
+            const neckX = x + dirX * (radius * 0.3);
+            const neckY = y + dirY * (radius * 0.3);
+            
+            const waveOffset = Math.sin(Date.now() * 0.012) * 6;
+            const oppositeAngle = angle + Math.PI;
+            
+            ctx.beginPath();
+            ctx.moveTo(neckX, neckY);
+            const midX = neckX + Math.cos(oppositeAngle) * (radius * 0.7) + Math.cos(oppositeAngle + Math.PI/2) * waveOffset;
+            const midY = neckY + Math.sin(oppositeAngle) * (radius * 0.7) + Math.sin(oppositeAngle + Math.PI/2) * waveOffset;
+            const endX = neckX + Math.cos(oppositeAngle) * (radius * 1.4) - Math.cos(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
+            const endY = neckY + Math.sin(oppositeAngle) * (radius * 1.4) - Math.sin(oppositeAngle + Math.PI/2) * waveOffset * 0.5;
+            
+            ctx.quadraticCurveTo(midX, midY, endX, endY);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Draw Hat/Helmet based on profile
+        this.resetNeonGlow();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        if (profileKey === 'blades') {
+            // Samurai Shogun Helmet (Kabuto)
+            ctx.beginPath();
+            ctx.arc(headX, headY - radius * 0.1, radius * 0.3, Math.PI, 0);
+            ctx.stroke();
+            
+            // Large Golden Crescent Horns
+            ctx.save();
+            this.setNeonGlow('#ffaa00', 10);
+            ctx.strokeStyle = '#ffaa00';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(headX - radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.35, false);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(headX + radius * 0.18, headY - radius * 0.25, radius * 0.25, Math.PI * 0.5, Math.PI * 1.65, true);
+            ctx.stroke();
+            ctx.restore();
+        } else {
+            // Straw Hat (Ronin / Ninja) - Cyber kasa with glowing neon rim!
+            ctx.fillStyle = '#1b1b22';
+            ctx.beginPath();
+            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.lineTo(headX + dirX * (radius * 0.35), headY + dirY * (radius * 0.35)); // peak
+            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Glowing cyan rim for Ronin hat
+            ctx.save();
+            this.setNeonGlow(color, 10);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(headX - perpX * (radius * 0.6) - dirX * (radius * 0.1), headY - perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.lineTo(headX + perpX * (radius * 0.6) - dirX * (radius * 0.1), headY + perpY * (radius * 0.6) - dirY * (radius * 0.1));
+            ctx.stroke();
+            ctx.restore();
+        }
+        
+        // Draw Katana (sword)
+        this.setNeonGlow(color, 16);
+        ctx.strokeStyle = '#ffffff';
+        ctx.shadowColor = color;
+        ctx.lineWidth = 2.5;
+        
+        let swordAngle = angle + Math.PI * 0.25;
+        if (isAiming) {
+            swordAngle = Math.atan2(-aimDy, -aimDx) - Math.PI * 0.15;
+        }
+        
+        const handX = x + perpX * (radius * 0.4);
+        const handY = y + perpY * (radius * 0.4);
+        const swordLength = radius * 1.35;
+        const swordEndX = handX + Math.cos(swordAngle) * swordLength;
+        const swordEndY = handY + Math.sin(swordAngle) * swordLength;
+        
+        ctx.beginPath();
+        ctx.moveTo(handX, handY);
+        ctx.lineTo(swordEndX, swordEndY);
+        ctx.stroke();
+        
+        // Draw Hilt (Tsuba)
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(handX - Math.sin(swordAngle) * 4, handY + Math.cos(swordAngle) * 4);
+        ctx.lineTo(handX + Math.sin(swordAngle) * 4, handY - Math.cos(swordAngle) * 4);
+        ctx.stroke();
+
+        // 5. Draw Arms (connecting shoulders to hands)
+        this.resetNeonGlow();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        // Arm holding the sword
+        ctx.moveTo(leftShoulderX, leftShoulderY);
+        ctx.lineTo(handX, handY);
+        // Free arm in fighting pose
+        const freeHandX = rightShoulderX + dirX * (radius * 0.1) + perpX * (radius * 0.3);
+        const freeHandY = rightShoulderY + dirY * (radius * 0.1) + perpY * (radius * 0.3);
+        ctx.moveTo(rightShoulderX, rightShoulderY);
+        ctx.lineTo(freeHandX, freeHandY);
+        ctx.stroke();
+        
+        // Draw simple health bar above head
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(x - 20, y - radius - 15, 40, 4);
+        ctx.fillStyle = color;
+        ctx.fillRect(x - 20, y - radius - 15, hpPercent * 40, 4);
+        
+        ctx.restore();
     }
 }
 
@@ -1044,15 +1372,15 @@ class ParticleSystem {
 
     // Sword clash spark shower
     spawnClashSparks(x, y, color) {
-        const count = Math.floor(Math.random() * 15) + 15;
+        const count = Math.floor(Math.random() * 20) + 25; // increased spark count
         
         for (let i = 0; i < count; i++) {
             const angle = Math.random() * Math.PI * 2;
-            const speed = Math.random() * 0.4 + 0.15; // px per ms
+            const speed = Math.random() * 0.55 + 0.20; // wider velocity spread
             const vx = Math.cos(angle) * speed;
             const vy = Math.sin(angle) * speed;
-            const size = Math.random() * 2 + 1.5;
-            const life = Math.random() * 300 + 200; // 0.2 - 0.5 sec
+            const size = Math.random() * 2.5 + 1.5;
+            const life = Math.random() * 400 + 250; // longer lifespan
             
             this.particles.push(new Particle(x, y, vx, vy, color, size, life, 1, 'spark'));
         }
@@ -1319,6 +1647,27 @@ class UpgradeManager {
                 icon: '💥',
                 desc: 'Gör 30% mer skada med dina slag, men du tar 10% mer skada själv.',
                 color: 'orange-card'
+            },
+            {
+                key: 'timeDilation',
+                title: 'TIDSSAKTNAD',
+                icon: '⏳',
+                desc: 'En perfekt parering (kollision med skott under dash) saktar ner tiden i 2.5 sek.',
+                color: 'green-card'
+            },
+            {
+                key: 'critSlash',
+                title: 'KRITISKT HUGG',
+                icon: '🎯',
+                desc: '20% chans att ditt dash-hugg eller din svärdsvåg gör 100% mer skada.',
+                color: 'cyan-card'
+            },
+            {
+                key: 'towerRepair',
+                title: 'TORN-REPARATION',
+                icon: '🛠️',
+                desc: 'Att stå still i laddningszonen reparerar långsamt ditt torn (+5 HP/sek).',
+                color: 'green-card'
             }
         ];
 
@@ -1344,7 +1693,8 @@ class UIController {
             upgrades: document.getElementById('upgrades-menu'),
             gameover: document.getElementById('game-over-screen'),
             victory: document.getElementById('victory-screen'),
-            hud: document.getElementById('hud')
+            hud: document.getElementById('hud'),
+            perks: document.getElementById('perk-selection-screen')
         };
         
         this.highestWaveVal = document.getElementById('highest-wave-val');
@@ -1624,6 +1974,74 @@ class UIController {
         
         this.showScreen('victory');
     }
+
+    renderPerkSelection(perks, onSelect, audioController) {
+        const grid = document.getElementById('perks-selection-grid');
+        if (!grid) return;
+        
+        grid.innerHTML = ''; // Clear previous content
+        
+        perks.forEach(perk => {
+            const card = document.createElement('div');
+            card.className = 'weapon-card';
+            card.style.flex = '1';
+            card.style.minWidth = '200px';
+            card.style.maxWidth = '250px';
+            card.style.margin = '10px';
+            card.style.display = 'flex';
+            card.style.flexDirection = 'column';
+            card.style.justifyContent = 'space-between';
+            card.style.alignItems = 'center';
+            card.style.textAlign = 'center';
+            card.style.padding = '20px';
+            
+            // Neon glow strip
+            const glow = document.createElement('div');
+            glow.className = `weapon-glow ${perk.color}`;
+            card.appendChild(glow);
+            
+            // Icon
+            const iconEl = document.createElement('div');
+            iconEl.style.fontSize = '3rem';
+            iconEl.style.marginBottom = '12px';
+            iconEl.innerText = perk.icon;
+            card.appendChild(iconEl);
+            
+            // Title
+            const titleEl = document.createElement('h3');
+            titleEl.style.fontSize = '1.05rem';
+            titleEl.style.margin = '8px 0';
+            titleEl.innerText = perk.title;
+            card.appendChild(titleEl);
+            
+            // Description
+            const descEl = document.createElement('p');
+            descEl.style.fontSize = '0.85rem';
+            descEl.style.color = 'rgba(255, 255, 255, 0.7)';
+            descEl.style.lineHeight = '1.4';
+            descEl.style.margin = '12px 0';
+            descEl.innerText = perk.desc;
+            card.appendChild(descEl);
+            
+            // Install button
+            const selectText = document.createElement('div');
+            selectText.className = 'weapon-cost';
+            selectText.innerText = 'INSTALLERA';
+            card.appendChild(selectText);
+            
+            // Click Handler
+            card.addEventListener('click', () => {
+                card.classList.add('perk-selected');
+                audioController.playClick();
+                // Brief delay for visual select animation feedback
+                setTimeout(() => {
+                    onSelect(perk.key);
+                }, 200);
+            });
+            
+            grid.appendChild(card);
+        });
+    }
 }
 
 
@@ -1812,6 +2230,11 @@ class Player {
         this.aimDx = 0;
         this.aimDy = 0;
         
+        // Perks system
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
+        
         // Upgrade Levels (synced from state)
         this.upgHealthLvl = 0;
         this.upgPostureLvl = 0;
@@ -1832,10 +2255,13 @@ class Player {
         // Visual angle
         this.angle = -Math.PI / 2; // pointing up
         
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+        
         // Size & weight definitions
         this.profiles = {
             katana: {
-                name: "Cyber Car",
+                name: "Cyber Ronin",
                 radius: 20,
                 mass: 1.0,
                 baseHp: 100,
@@ -1844,7 +2270,7 @@ class Player {
                 color: "#00f0ff"
             },
             blades: {
-                name: "Plasma Truck",
+                name: "Armored Shogun",
                 radius: 26,
                 mass: 1.8,
                 baseHp: 150,
@@ -1853,7 +2279,7 @@ class Player {
                 color: "#ff0077"
             },
             hammer: {
-                name: "Laser Cycle",
+                name: "Shadow Ninja",
                 radius: 16,
                 mass: 0.6,
                 baseHp: 70,
@@ -1890,6 +2316,10 @@ class Player {
         this.vy = 0;
         this.state = 'idle';
         this.isAiming = false;
+        
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
     }
 
     // Check if a point is inside the car's body or control zone
@@ -1964,33 +2394,35 @@ class Player {
 
         this.game.audioSynth.playShoot();
 
+        const sizeBonus = (this.activeWeaponKey === 'katana' ? 2 : 0);
+
         equippedCannons.forEach(cannon => {
             if (cannon === 'plasma') {
                 // Heavy Plasma: slow moving, huge size, massive damage
-                this.game.spawnProjectile(startX, startY, 0, -speed * 0.65, 16, 'player', 'plasma');
+                this.game.spawnProjectile(startX, startY, 0, -speed * 0.65, 16 + sizeBonus, 'player', 'plasma');
             } else if (cannon === 'rapid') {
                 // Dubbel-Laser: two parallel neon-green lasers
-                this.game.spawnProjectile(startX - 10, startY, 0, -speed, 6, 'player', 'rapid');
-                this.game.spawnProjectile(startX + 10, startY, 0, -speed, 6, 'player', 'rapid');
+                this.game.spawnProjectile(startX - 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
+                this.game.spawnProjectile(startX + 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
             } else if (cannon === 'trio') {
                 // Trio-Laser: three spread shots
-                this.game.spawnProjectile(startX, startY, 0, -speed, 7, 'player', 'trio');
-                this.game.spawnProjectile(startX, startY, -0.12, -speed, 7, 'player', 'trio');
-                this.game.spawnProjectile(startX, startY, 0.12, -speed, 7, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, -0.12, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, 0.12, -speed, 7 + sizeBonus, 'player', 'trio');
             } else if (cannon === 'hagel') {
                 // Hagel-Laser: 5 shots in a wide spread
                 const spreads = [-0.28, -0.14, 0, 0.14, 0.28];
-                spreads.forEach(s => this.game.spawnProjectile(startX, startY, s, -speed, 5, 'player', 'hagel'));
+                spreads.forEach(s => this.game.spawnProjectile(startX, startY, s, -speed, 5 + sizeBonus, 'player', 'hagel'));
             } else if (cannon === 'sniper') {
                 // Sniper-Laser: single ultra-fast pinpoint beam
-                this.game.spawnProjectile(startX, startY, 0, -speed * 2.2, 4, 'player', 'sniper');
+                this.game.spawnProjectile(startX, startY, 0, -speed * 2.2, 4 + sizeBonus, 'player', 'sniper');
             } else if (cannon === 'bakåt') {
                 // Bakåt-Laser: fires both up and down simultaneously
-                this.game.spawnProjectile(startX, startY, 0, -speed, 8, 'player', 'bakåt');
-                this.game.spawnProjectile(startX, startY, 0, speed, 8, 'player', 'bakåt');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'bakåt');
+                this.game.spawnProjectile(startX, startY, 0, speed, 8 + sizeBonus, 'player', 'bakåt');
             } else {
                 // Standard Puls-Laser
-                this.game.spawnProjectile(startX, startY, 0, -speed, 8, 'player', 'laser');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'laser');
             }
         });
     }
@@ -1998,11 +2430,35 @@ class Player {
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
         
-        this.hp = Math.max(0, this.hp - amount);
+        // Check Shield Perk
+        if (this.activePerk === 'shieldCharge' && this.shieldHp > 0) {
+            this.shieldHp = 0;
+            this.shieldCooldown = 12000; // 12 seconds
+            particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 60);
+            canvasController.shake(4, 100);
+            this.game.audioSynth.playParry();
+            
+            // Pushback still applies
+            const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
+            this.vx = Math.cos(pushAngle) * 0.15;
+            this.vy = Math.sin(pushAngle) * 0.15;
+            return;
+        }
+        
+        let dmg = amount;
+        if (this.activeWeaponKey === 'blades') {
+            dmg *= 0.85; // 15% damage reduction
+        }
+        if (this.activePerk === 'overdrive') {
+            dmg *= 1.10; // Take 10% more damage
+        }
+        
+        this.hp = Math.max(0, this.hp - dmg);
         
         // Spark particles
         particleSystem.spawnClashSparks(this.x, this.y, this.color);
-        canvasController.shake(6, 150);
+        canvasController.flash('rgba(255, 0, 51, 0.4)', 220); // brief red damage flash
+        canvasController.shake(8, 180);
         
         if (this.hp <= 0) {
             this.state = 'dead';
@@ -2026,6 +2482,18 @@ class Player {
     }
 
     update(deltaTime, width, height, particleSystem) {
+        // Update active shield cooldown
+        if (this.activePerk === 'shieldCharge' && this.state !== 'dead') {
+            if (this.shieldHp === 0) {
+                this.shieldCooldown -= deltaTime;
+                if (this.shieldCooldown <= 0) {
+                    this.shieldHp = 1;
+                    this.shieldCooldown = 0;
+                    particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 35);
+                }
+            }
+        }
+
         if (this.state === 'dead') {
             this.respawnTimer -= deltaTime;
             if (this.respawnTimer <= 0) {
@@ -2045,8 +2513,9 @@ class Player {
         if (!this.isAiming) {
             this.x += this.vx * deltaTime;
             this.y += this.vy * deltaTime;
-            this.vx *= Math.pow(this.friction, deltaTime / 16);
-            this.vy *= Math.pow(this.friction, deltaTime / 16);
+            const currentFriction = this.activeWeaponKey === 'hammer' ? 0.99 : this.friction;
+            this.vx *= Math.pow(currentFriction, deltaTime / 16);
+            this.vy *= Math.pow(currentFriction, deltaTime / 16);
             
             let bounced = false;
             if (this.x < this.radius) {
@@ -2085,23 +2554,53 @@ class Player {
         const inChargingZone = this.y > height - 150;
         const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
         
-        if (inChargingZone && isMovingSlowly && this.energy < 3 && !this.isAiming) {
-            const chargeNeeded = 1500 / (1 + this.upgPostureLvl * 0.15); // ms
-            this.chargeTimer += deltaTime;
+        if (inChargingZone && isMovingSlowly && !this.isAiming) {
+            // Shadow Ninja charges energy 20% faster
+            const ninjaFactor = this.activeWeaponKey === 'hammer' ? 1.20 : 1.0;
+            const chargeNeeded = 1500 / ((1 + this.upgPostureLvl * 0.15) * ninjaFactor); // ms
             
-            // Spawn charging sparkles
-            if (Math.random() < 0.1) {
-                particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+            if (this.energy < 3) {
+                this.chargeTimer += deltaTime;
+                
+                // Spawn charging sparkles
+                if (Math.random() < 0.1) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+                }
+
+                if (this.chargeTimer >= chargeNeeded) {
+                    this.energy++;
+                    this.chargeTimer = 0;
+                    this.game.audioSynth.playUpgrade();
+                    particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+                }
             }
 
-            if (this.chargeTimer >= chargeNeeded) {
-                this.energy++;
-                this.chargeTimer = 0;
-                this.game.audioSynth.playUpgrade();
-                particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+            // Tower Repair Perk: regenerates 5 HP per second (0.005 HP/ms)
+            if (this.activePerk === 'towerRepair' && this.game.bottomTower.hp < this.game.bottomTower.maxHp) {
+                this.game.bottomTower.hp = Math.min(this.game.bottomTower.maxHp, this.game.bottomTower.hp + 0.005 * deltaTime);
+                if (Math.random() < 0.08) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 15, this.y + (Math.random() - 0.5) * 15, '#00ff66');
+                }
             }
         } else {
             this.chargeTimer = 0;
+        }
+
+        // Maintain trail history
+        if (this.state !== 'dead') {
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.04) {
+                this.trailHistory.push({ x: this.x, y: this.y, angle: this.angle });
+                if (this.trailHistory.length > 4) {
+                    this.trailHistory.shift();
+                }
+            } else {
+                if (this.trailHistory.length > 0) {
+                    this.trailHistory.shift();
+                }
+            }
+        } else {
+            this.trailHistory = [];
         }
     }
 
@@ -2124,39 +2623,22 @@ class Player {
             ctx.restore();
         }
 
-        // Draw neon shadow
-        canvasController.setNeonGlow(this.color, 15);
-        ctx.fillStyle = '#0f0f1b';
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 3.5;
-        
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Draw car wheels/bars for variety
-        canvasController.resetNeonGlow();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        // Symmetrical lines representing a cockpit or tires
-        ctx.arc(this.x, this.y, this.radius * 0.6, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Direction line
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(this.x, this.y);
-        ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 6), this.y + Math.sin(this.angle) * (this.radius + 6));
-        ctx.stroke();
-
-        // Draw simple health bar above car
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, 40, 4);
-        ctx.fillStyle = this.color;
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, (this.hp / this.maxHp) * 40, 4);
+        // Draw the samurai character
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            this.radius, 
+            this.color, 
+            this.angle, 
+            this.activeWeaponKey, 
+            this.isAiming, 
+            this.aimDx, 
+            this.aimDy, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y > this.game.canvasCtrl.height - 150)
+        );
 
         ctx.restore();
     }
@@ -2193,6 +2675,9 @@ class Enemy {
         // Visual angle
         this.angle = Math.PI / 2; // pointing down
         
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+        
         // AI behavior state machine
         this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
         this.aiTimer = 1000; // time until next AI action
@@ -2208,11 +2693,35 @@ class Enemy {
     resetForRun(isBoss = false) {
         this.isBoss = isBoss;
         if (isBoss) {
-            this.maxHp = 400;
-            this.radius = 35;
-            this.mass = 3.0;
+            this.maxHp = 500;
+            this.radius = 24; // Torso radius
+            this.mass = 2.0;
             this.color = 'crimson';
+            
+            // Initialize ragdoll nodes
+            this.ragdollNodes = [
+                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 24, mass: 1.5, color: 'crimson' },
+                { name: 'head', x: this.x, y: this.y - 32, vx: 0, vy: 0, radius: 14, mass: 0.8, color: '#ff0055' },
+                { name: 'leftHand', x: this.x - 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
+                { name: 'rightHand', x: this.x + 34, y: this.y - 8, vx: 0, vy: 0, radius: 10, mass: 0.5, color: '#ff0077' },
+                { name: 'leftFoot', x: this.x - 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' },
+                { name: 'rightFoot', x: this.x + 18, y: this.y + 32, vx: 0, vy: 0, radius: 11, mass: 0.7, color: '#990033' }
+            ];
+
+            // Define distance constraints between nodes
+            this.ragdollConstraints = [
+                [0, 1, 32], // torso to head
+                [0, 2, 34], // torso to leftHand
+                [0, 3, 34], // torso to rightHand
+                [0, 4, 32], // torso to leftFoot
+                [0, 5, 32], // torso to rightFoot
+                [1, 2, 38], // head to leftHand
+                [1, 3, 38], // head to rightHand
+                [4, 5, 28]  // leftFoot to rightFoot
+            ];
         } else {
+            this.ragdollNodes = null;
+            this.ragdollConstraints = null;
             this.maxHp = 100;
             this.radius = 20;
             this.mass = 1.0;
@@ -2226,6 +2735,27 @@ class Enemy {
         this.state = 'idle';
         this.aiState = 'idle';
         this.aiTimer = 1000;
+        
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+    }
+
+    resetRagdollPositions() {
+        if (!this.isBoss || !this.ragdollNodes) return;
+        
+        const torso = this.ragdollNodes[0];
+        const head = this.ragdollNodes[1];
+        const leftHand = this.ragdollNodes[2];
+        const rightHand = this.ragdollNodes[3];
+        const leftFoot = this.ragdollNodes[4];
+        const rightFoot = this.ragdollNodes[5];
+        
+        torso.x = this.x; torso.y = this.y; torso.vx = 0; torso.vy = 0;
+        head.x = this.x; head.y = this.y - 32; head.vx = 0; head.vy = 0;
+        leftHand.x = this.x - 34; leftHand.y = this.y - 8; leftHand.vx = 0; leftHand.vy = 0;
+        rightHand.x = this.x + 34; rightHand.y = this.y - 8; rightHand.vx = 0; rightHand.vy = 0;
+        leftFoot.x = this.x - 18; leftFoot.y = this.y + 32; leftFoot.vx = 0; leftFoot.vy = 0;
+        rightFoot.x = this.x + 18; rightFoot.y = this.y + 32; rightFoot.vx = 0; rightFoot.vy = 0;
     }
 
     setVehicleType(type) {
@@ -2238,10 +2768,51 @@ class Enemy {
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
         
-        this.hp = Math.max(0, this.hp - amount);
+        let dmg = amount;
         
-        // Spark particles
-        particleSystem.spawnClashSparks(this.x, this.y, this.color);
+        // Apply player active perks
+        const player = this.game.player;
+        if (player && player.state !== 'dead') {
+            let mult = 1.0;
+            
+            // Overdrive perk: +30% damage dealt
+            if (player.activePerk === 'overdrive') {
+                mult += 0.30;
+            }
+            
+            // Lightning Slash: +30% damage if player is dashing (speed > 0.15)
+            if (player.activePerk === 'lightningSlash' && Math.hypot(player.vx, player.vy) > 0.15) {
+                mult += 0.30;
+            }
+            
+            dmg *= mult;
+            
+            // Crit Slash perk: 20% chance of double damage
+            if (player.activePerk === 'critSlash' && Math.random() < 0.20) {
+                dmg *= 2.0;
+                // Red glowing crit flash visual
+                particleSystem.spawnShockwave(attackerX, attackerY, '#ff3300', 45);
+            }
+        }
+
+        this.hp = Math.max(0, this.hp - dmg);
+        
+        // Spark particles at closest hit node
+        let sparkX = this.x;
+        let sparkY = this.y;
+        if (this.isBoss && this.ragdollNodes) {
+            let minDist = Infinity;
+            this.ragdollNodes.forEach(node => {
+                const dist = Math.hypot(node.x - attackerX, node.y - attackerY);
+                if (dist < minDist) {
+                    minDist = dist;
+                    sparkX = node.x;
+                    sparkY = node.y;
+                }
+            });
+        }
+        particleSystem.spawnClashSparks(sparkX, sparkY, this.color);
+        canvasController.flash('rgba(0, 240, 255, 0.2)', 180); // Cyan flash when damaging enemy
         canvasController.shake(6, 150);
         
         if (this.hp <= 0) {
@@ -2252,17 +2823,31 @@ class Enemy {
             this.aiState = 'idle';
             this.aiTimer = 3000;
             
-            // Explosion particles
-            particleSystem.spawnShockwave(this.x, this.y, this.color, 70);
+            // Explosion particles on all joints if boss
+            if (this.isBoss && this.ragdollNodes) {
+                this.ragdollNodes.forEach(node => {
+                    particleSystem.spawnShockwave(node.x, node.y, node.color, 45);
+                });
+            } else {
+                particleSystem.spawnShockwave(this.x, this.y, this.color, 70);
+            }
+            
             for (let i = 0; i < 20; i++) {
                 particleSystem.spawnAmbience(this.game.canvasCtrl.width, this.game.canvasCtrl.height, 2);
             }
-            this.game.audioSynth.playVictory(); // AI died, player wins a point / credits!
+            this.game.audioSynth.playVictory();
         } else {
             // Pushback force
             const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
-            this.vx = Math.cos(pushAngle) * 0.22;
-            this.vy = Math.sin(pushAngle) * 0.22;
+            if (this.isBoss && this.ragdollNodes) {
+                this.ragdollNodes.forEach(node => {
+                    node.vx += Math.cos(pushAngle) * 0.18;
+                    node.vy += Math.sin(pushAngle) * 0.18;
+                });
+            } else {
+                this.vx = Math.cos(pushAngle) * 0.22;
+                this.vy = Math.sin(pushAngle) * 0.22;
+            }
         }
     }
 
@@ -2277,51 +2862,166 @@ class Enemy {
                 this.y = 120;
                 this.vx = 0;
                 this.vy = 0;
+                if (this.isBoss) {
+                    this.resetRagdollPositions();
+                }
                 particleSystem.spawnShockwave(this.x, this.y, this.color, 40);
             }
             return;
         }
 
-        // Apply friction
-        this.x += this.vx * deltaTime;
-        this.y += this.vy * deltaTime;
-        this.vx *= Math.pow(this.friction, deltaTime / 16);
-        this.vy *= Math.pow(this.friction, deltaTime / 16);
-        
-        let bounced = false;
-        if (this.x < this.radius) {
-            this.x = this.radius;
-            this.vx = -this.vx * 0.6;
-            bounced = true;
-        } else if (this.x > width - this.radius) {
-            this.x = width - this.radius;
-            this.vx = -this.vx * 0.6;
-            bounced = true;
-        }
-        
-        if (this.y < this.radius) {
-            this.y = this.radius;
-            this.vy = -this.vy * 0.6;
-            bounced = true;
-        } else if (this.y > height - this.radius) {
-            this.y = height - this.radius;
-            this.vy = -this.vy * 0.6;
-            bounced = true;
-        }
-        
-        if (bounced && Math.hypot(this.vx, this.vy) > 0.03 && audioController) {
-            audioController.playClick();
-        }
-        
-        // Cap velocities
-        const speed = Math.hypot(this.vx, this.vy);
-        if (speed > 0.05) {
-            this.angle = Math.atan2(this.vy, this.vx);
+        // Apply friction & ragdoll constraints
+        if (this.isBoss && this.ragdollNodes) {
+            // Transfer launch velocities to torso node
+            const torso = this.ragdollNodes[0];
+            if (this.vx !== 0 || this.vy !== 0) {
+                torso.vx = this.vx;
+                torso.vy = this.vy;
+                this.vx = 0;
+                this.vy = 0;
+            }
+
+            // Move each node
+            this.ragdollNodes.forEach(node => {
+                node.x += node.vx * deltaTime;
+                node.y += node.vy * deltaTime;
+                node.vx *= Math.pow(this.friction, deltaTime / 16);
+                node.vy *= Math.pow(this.friction, deltaTime / 16);
+            });
+
+            // Solve distance constraints
+            // Solve distance constraints
+            for (let iter = 0; iter < 4; iter++) {
+                this.ragdollConstraints.forEach(([idxA, idxB, restLength]) => {
+                    const nodeA = this.ragdollNodes[idxA];
+                    const nodeB = this.ragdollNodes[idxB];
+                    
+                    const dx = nodeB.x - nodeA.x;
+                    const dy = nodeB.y - nodeA.y;
+                    const dist = Math.hypot(dx, dy) || 0.001;
+                    const diff = restLength - dist;
+                    const percent = (diff / dist) * 0.5;
+                    
+                    const totalMass = nodeA.mass + nodeB.mass;
+                    const pullA = (nodeB.mass / totalMass) * percent;
+                    const pullB = (nodeA.mass / totalMass) * percent;
+                    
+                    nodeA.x -= dx * pullA;
+                    nodeA.y -= dy * pullA;
+                    nodeB.x += dx * pullB;
+                    nodeB.y += dy * pullB;
+
+                    const impulseX = dx * percent * 0.05;
+                    const impulseY = dy * percent * 0.05;
+                    nodeA.vx -= impulseX * (nodeB.mass / totalMass);
+                    nodeA.vy -= impulseY * (nodeB.mass / totalMass);
+                    nodeB.vx += impulseX * (nodeA.mass / totalMass);
+                    nodeB.vy += impulseY * (nodeA.mass / totalMass);
+                });
+            }
+
+            // Boundary checks
+            this.ragdollNodes.forEach(node => {
+                let bounced = false;
+                if (node.x < node.radius) {
+                    node.x = node.radius;
+                    node.vx = -node.vx * 0.5;
+                    bounced = true;
+                } else if (node.x > width - node.radius) {
+                    node.x = width - node.radius;
+                    node.vx = -node.vx * 0.5;
+                    bounced = true;
+                }
+                if (node.y < node.radius) {
+                    node.y = node.radius;
+                    node.vy = -node.vy * 0.5;
+                    bounced = true;
+                } else if (node.y > height - node.radius) {
+                    node.y = height - node.radius;
+                    node.vy = -node.vy * 0.5;
+                    bounced = true;
+                }
+                if (bounced && Math.hypot(node.vx, node.vy) > 0.05 && audioController) {
+                    audioController.playClick();
+                }
+            });
+
+            // Sync main object variables
+            this.x = torso.x;
+            this.y = torso.y;
+            this.vx = torso.vx;
+            this.vy = torso.vy;
+
+            // Spawn foot-jet thrust flame sparks
+            const leftFoot = this.ragdollNodes[4];
+            const rightFoot = this.ragdollNodes[5];
+            const speed = Math.hypot(torso.vx, torso.vy);
+            if (speed > 0.08) {
+                if (Math.random() < 0.25) {
+                    particleSystem.spawnClashSparks(leftFoot.x, leftFoot.y, '#ff4400');
+                    particleSystem.spawnClashSparks(rightFoot.x, rightFoot.y, '#ff4400');
+                }
+            }
+        } else {
+            // Standard enemy physics
+            this.x += this.vx * deltaTime;
+            this.y += this.vy * deltaTime;
+            this.vx *= Math.pow(this.friction, deltaTime / 16);
+            this.vy *= Math.pow(this.friction, deltaTime / 16);
+            
+            let bounced = false;
+            if (this.x < this.radius) {
+                this.x = this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            } else if (this.x > width - this.radius) {
+                this.x = width - this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            }
+            
+            if (this.y < this.radius) {
+                this.y = this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            } else if (this.y > height - this.radius) {
+                this.y = height - this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            }
+            
+            if (bounced && Math.hypot(this.vx, this.vy) > 0.03 && audioController) {
+                audioController.playClick();
+            }
+            
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.05) {
+                this.angle = Math.atan2(this.vy, this.vx);
+            }
         }
 
         // --- SINGLE PLAYER AI CONTROLLER ---
         if (!this.game.isMultiplayer) {
             this.updateAI(deltaTime, player, particleSystem, width, height);
+        }
+
+        // Maintain trail history for standard enemy
+        if (!this.isBoss) {
+            if (this.state !== 'dead') {
+                const speed = Math.hypot(this.vx, this.vy);
+                if (speed > 0.04) {
+                    this.trailHistory.push({ x: this.x, y: this.y, angle: this.angle });
+                    if (this.trailHistory.length > 4) {
+                        this.trailHistory.shift();
+                    }
+                } else {
+                    if (this.trailHistory.length > 0) {
+                        this.trailHistory.shift();
+                    }
+                }
+            } else {
+                this.trailHistory = [];
+            }
         }
     }
 
@@ -2337,7 +3037,6 @@ class Enemy {
             if (Math.random() < 0.1) {
                 particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
             }
-            // AI charges at a normal pace
             if (this.chargeTimer >= 1500) {
                 this.energy++;
                 this.chargeTimer = 0;
@@ -2346,6 +3045,27 @@ class Enemy {
             }
         } else {
             this.chargeTimer = 0;
+        }
+
+        // Melee punch logic for boss
+        if (this.isBoss && this.ragdollNodes) {
+            const distToPlayer = Math.hypot(player.x - this.x, player.y - this.y);
+            if (distToPlayer < 200) {
+                const leftHand = this.ragdollNodes[2];
+                const rightHand = this.ragdollNodes[3];
+                const angleToPlayer = Math.atan2(player.y - this.y, player.x - this.x);
+                
+                // Pull hands towards player to punch!
+                leftHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
+                leftHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
+                rightHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
+                rightHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
+
+                if (Math.random() < 0.04) {
+                    particleSystem.spawnClashSparks(leftHand.x, leftHand.y, '#ff0055');
+                    particleSystem.spawnClashSparks(rightHand.x, rightHand.y, '#ff0055');
+                }
+            }
         }
 
         // AI decision logic
@@ -2360,26 +3080,25 @@ class Enemy {
                 const targetX = width / 2 + (Math.random() - 0.5) * 60;
                 const targetY = 100;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
-                // Launch towards charging zone
                 this.vx = Math.cos(angle) * 0.45;
                 this.vy = Math.sin(angle) * 0.45;
                 this.game.audioSynth.playSlash('katana');
             } else if (this.energy > 0 && Math.random() < 0.6) {
-                // Shoot a projectile!
+                // Shoot a projectile
                 this.energy--;
                 this.game.audioSynth.playShoot();
                 
-                if (this.isBoss) {
-                    // Fire from BOTH Left Tower (120) and Right Tower (width - 120) simultaneously!
+                if (this.isBoss && this.ragdollNodes) {
+                    // Fire swordwaves from BOTH hands!
+                    const leftHand = this.ragdollNodes[2];
+                    const rightHand = this.ragdollNodes[3];
                     const speed = 0.50; // faster lasers for boss
                     
-                    // Left laser
-                    const dxLeft = player.x - 120;
-                    this.game.spawnProjectile(120, 90, dxLeft * 0.0015, speed, 8, 'enemy');
+                    const dxLeft = player.x - leftHand.x;
+                    this.game.spawnProjectile(leftHand.x, leftHand.y, dxLeft * 0.0015, speed, 8, 'enemy');
                     
-                    // Right laser
-                    const dxRight = player.x - (width - 120);
-                    this.game.spawnProjectile(width - 120, 90, dxRight * 0.0015, speed, 8, 'enemy');
+                    const dxRight = player.x - rightHand.x;
+                    this.game.spawnProjectile(rightHand.x, rightHand.y, dxRight * 0.0015, speed, 8, 'enemy');
                 } else {
                     const startX = width / 2;
                     const startY = 90;
@@ -2388,12 +3107,11 @@ class Enemy {
                     this.game.spawnProjectile(startX, startY, dx * 0.0015, speed, 8, 'enemy');
                 }
             } else {
-                // Ram the player's tower or the player's car
+                // Ram/dash towards player or player tower
                 const targetX = Math.random() < 0.65 ? player.x : (width / 2 + (Math.random() - 0.5) * 100);
-                const targetY = height - 90; // Bottom tower area
+                const targetY = height - 90;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 
-                // Launch
                 const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;
                 const launchForce = (0.5 + Math.random() * 0.25) * launchForceMultiplier;
                 this.vx = Math.cos(angle) * launchForce;
@@ -2408,38 +3126,127 @@ class Enemy {
 
         ctx.save();
 
-        // Draw neon shadow
-        canvasController.setNeonGlow(this.color, 15);
-        ctx.fillStyle = '#1b0f14';
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 3.5;
-        
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        if (this.isBoss && this.ragdollNodes) {
+            const torso = this.ragdollNodes[0];
+            const head = this.ragdollNodes[1];
+            const leftHand = this.ragdollNodes[2];
+            const rightHand = this.ragdollNodes[3];
+            const leftFoot = this.ragdollNodes[4];
+            const rightFoot = this.ragdollNodes[5];
 
-        // Draw cockpit details
-        canvasController.resetNeonGlow();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius * 0.6, 0, Math.PI * 2);
-        ctx.stroke();
+            // 1. Draw glowing neon bones (limbs)
+            canvasController.setNeonGlow(this.color, 15);
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = 9;
+            ctx.lineCap = 'round';
+            this.ragdollConstraints.forEach(([idxA, idxB]) => {
+                const nodeA = this.ragdollNodes[idxA];
+                const nodeB = this.ragdollNodes[idxB];
+                ctx.beginPath();
+                ctx.moveTo(nodeA.x, nodeA.y);
+                ctx.lineTo(nodeB.x, nodeB.y);
+                ctx.stroke();
+            });
 
-        // Direction line
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(this.x, this.y);
-        ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 6), this.y + Math.sin(this.angle) * (this.radius + 6));
-        ctx.stroke();
+            // 2. Draw Giant Shogun Shoulder Pads
+            canvasController.setNeonGlow(this.color, 12);
+            ctx.fillStyle = '#1b0f14';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2.5;
+            
+            ctx.beginPath();
+            ctx.arc(torso.x - 22, torso.y - 12, 12, Math.PI, 0);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(torso.x + 22, torso.y - 12, 12, Math.PI, 0);
+            ctx.fill();
+            ctx.stroke();
 
-        // Health bar above car
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, 40, 4);
-        ctx.fillStyle = this.color;
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, (this.hp / this.maxHp) * 40, 4);
+            // 3. Draw each joint node
+            this.ragdollNodes.forEach(node => {
+                canvasController.setNeonGlow(node.color, 15);
+                ctx.fillStyle = '#0f050a';
+                ctx.strokeStyle = node.color;
+                ctx.lineWidth = 3.5;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                canvasController.resetNeonGlow();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, node.radius * 0.5, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+
+            // 4. Draw giant Kabuto Samurai Horns
+            canvasController.setNeonGlow(head.color, 12);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(head.x - 8, head.y - 10, 10, 0, Math.PI * 1.5, true);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(head.x + 8, head.y - 10, 10, Math.PI, Math.PI * 1.5);
+            ctx.stroke();
+
+            // 5. Draw Head Visor (faces player)
+            const angleToPlayer = Math.atan2(this.game.player.y - head.y, this.game.player.x - head.x);
+            ctx.save();
+            ctx.translate(head.x, head.y);
+            ctx.rotate(angleToPlayer);
+            ctx.fillStyle = '#00ffff';
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 10;
+            ctx.fillRect(head.radius * 0.1, -head.radius * 0.3, head.radius * 0.6, head.radius * 0.6);
+            ctx.restore();
+
+            // 6. Draw glowing neon katanas in hands
+            canvasController.setNeonGlow(this.color, 18);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3.5;
+            
+            const leftSwordAngle = Math.atan2(leftHand.y - torso.y, leftHand.x - torso.x) + Math.PI * 0.15;
+            ctx.beginPath();
+            ctx.moveTo(leftHand.x, leftHand.y);
+            ctx.lineTo(leftHand.x + Math.cos(leftSwordAngle) * 45, leftHand.y + Math.sin(leftSwordAngle) * 45);
+            ctx.stroke();
+            
+            const rightSwordAngle = Math.atan2(rightHand.y - torso.y, rightHand.x - torso.x) - Math.PI * 0.15;
+            ctx.beginPath();
+            ctx.moveTo(rightHand.x, rightHand.y);
+            ctx.lineTo(rightHand.x + Math.cos(rightSwordAngle) * 45, rightHand.y + Math.sin(rightSwordAngle) * 45);
+            ctx.stroke();
+
+            canvasController.resetNeonGlow();
+
+            // 7. Draw health bar above boss head
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(head.x - 30, head.y - head.radius - 28, 60, 5);
+            ctx.fillStyle = this.color;
+            ctx.fillRect(head.x - 30, head.y - head.radius - 28, (this.hp / this.maxHp) * 60, 5);
+        } else {
+            // --- DRAW STANDARD SAMURAI ENEMY ---
+             canvasController.drawSamuraiCharacter(
+                ctx, 
+                this.x, 
+                this.y, 
+                this.radius, 
+                this.color, 
+                this.angle, 
+                'katana', 
+                false, 
+                0, 
+                0, 
+                this.hp / this.maxHp,
+                this.trailHistory,
+                (this.y < 150)
+            );
+        }
 
         ctx.restore();
     }
@@ -2447,15 +3254,7 @@ class Enemy {
 
 
 /* --- BUNDLED FROM: src/game.js --- */
-/* DANGEROUS FIGHT - MAIN CORE GAME LOOP & SYSTEM ORCHESTRATOR */
-
-
-
-
-
-
-
-
+/* DANGEROUS FIGHT - MAIN CORE GAME LOOP & SYSTEM ORCHESTRATOR */
 
 class Game {
     constructor() {
@@ -2482,6 +3281,7 @@ class Game {
         this.isHardBossRound = false;
         this.bossWarningTimeout = null;
         this.lastTime = 0;
+        this.slowMoTimer = 0;
         
         // Multiplayer WebRTC state
         this.isMultiplayer = false;
@@ -2901,6 +3701,7 @@ class Game {
         this.runCredits = 0;
         this.particles.clear();
         this.projectiles = [];
+        this.slowMoTimer = 0; // reset slow motion
         
         let isBoss = false;
         if (!this.isMultiplayer) {
@@ -2925,16 +3726,48 @@ class Game {
         this.player.resetForRun();
         this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
         
+        // Settle active weapon on player
+        this.player.activeWeaponKey = this.upgradeMgr.state.equippedWeapon || 'katana';
+        
         // Reset enemy car
         this.enemy.resetForRun(isBoss);
         
-        this.gameState = 'playing';
-        this.uiCtrl.showScreen('hud');
-        
-        // Manage HUD boss warning banner overlay
+        // Offer cybernetic perks in single-player before entering battle
+        if (!this.isMultiplayer) {
+            const randomPerks = this.upgradeMgr.getRandomPerks();
+            this.uiCtrl.showScreen('perks');
+            this.uiCtrl.renderPerkSelection(randomPerks, (perkKey) => {
+                this.player.activePerk = perkKey;
+                if (perkKey === 'shieldCharge') {
+                    this.player.shieldHp = 1;
+                    this.player.shieldCooldown = 0;
+                }
+                
+                // Complete game start after perk choice
+                this.gameState = 'playing';
+                this.uiCtrl.showScreen('hud');
+                
+                // Manage HUD boss warning banner overlay
+                this.showBossWarningBanner(isBoss);
+                
+                // Play epic bass voice intro and start background music!
+                this.audioSynth.playVoiceIntro(isBoss);
+                this.audioSynth.startMusic();
+            }, this.audioSynth);
+        } else {
+            // Multiplayer starts instantly (symmetrical gameplay without active perks)
+            this.gameState = 'playing';
+            this.uiCtrl.showScreen('hud');
+            this.audioSynth.playVoiceIntro(false);
+            this.audioSynth.startMusic();
+        }
+    }
+
+    showBossWarningBanner(isBoss) {
         const warningBanner = document.getElementById('boss-warning');
         if (warningBanner) {
             if (isBoss) {
+                warningBanner.innerText = "VARNING: SHOGUN DETEKTERAD! 💀";
                 warningBanner.classList.remove('hidden');
                 if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
                 this.bossWarningTimeout = setTimeout(() => {
@@ -2948,10 +3781,6 @@ class Game {
                 }
             }
         }
-        
-        // Play epic bass voice intro and start background music!
-        this.audioSynth.playVoiceIntro(isBoss);
-        this.audioSynth.startMusic();
     }
 
     // Projectile Spawner
@@ -3038,16 +3867,29 @@ class Game {
             return;
         }
 
+        // Handle slow-motion time dilation
+        let enemyDt = dt;
+        let physicsDt = dt;
+        if (this.slowMoTimer > 0) {
+            this.slowMoTimer -= dt;
+            enemyDt = dt * 0.40;
+            physicsDt = dt * 0.40;
+            // Ambient slow-mo neon pulse
+            if (Math.random() < 0.08) {
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.05)', 80);
+            }
+        }
+
         // Update systems
-        this.canvasCtrl.update(dt);
+        this.canvasCtrl.update(dt, this.player);
         this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
         this.particles.update(dt);
         
         this.player.update(dt, this.canvasCtrl.width, this.canvasCtrl.height, this.particles);
-        this.enemy.update(dt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+        this.enemy.update(enemyDt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
         
-        this.updatePhysics(dt);
-        this.checkCollisions(dt);
+        this.updatePhysics(physicsDt);
+        this.checkCollisions(physicsDt);
         
         // Network Sync
         if (this.isMultiplayer) {
@@ -3197,6 +4039,7 @@ class Game {
                 // Damage top tower
                 this.topTower.hp = Math.max(0, this.topTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
                 this.projectiles.splice(i, 1);
@@ -3206,6 +4049,7 @@ class Game {
                 // Damage bottom tower
                 this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
                 this.canvasCtrl.shake(8, 200);
                 this.audioSynth.playHit();
                 this.projectiles.splice(i, 1);
@@ -3213,16 +4057,63 @@ class Game {
                 continue;
             }
             
-            // Check car hits
+            // Check samurai/enemy hits
             if (this.player.state !== 'dead' && Math.hypot(p.x - this.player.x, p.y - this.player.y) < this.player.radius + p.radius) {
+                // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
+                if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
+                    this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
+                    this.canvasCtrl.shake(7, 120);
+                    this.audioSynth.playParry();
+                    
+                    // Vampirism Perk Heal
+                    if (this.player.activePerk === 'vampirism') {
+                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.floor(this.player.maxHp * 0.08));
+                    }
+                    
+                    // Time Dilation slow motion perk
+                    if (this.player.activePerk === 'timeDilation') {
+                        this.slowMoTimer = 2500;
+                    }
+                    
+                    // Deflect the projectile (reverse direction and transfer ownership to player!)
+                    p.owner = 'player';
+                    p.vx = -p.vx * 1.25;
+                    p.vy = -p.vy * 1.25;
+                    p.color = '#00f0ff'; // change laser color to player cyan!
+                    
+                    continue;
+                }
+                
                 this.player.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
                 this.projectiles.splice(i, 1);
                 continue;
             }
-            if (this.enemy.state !== 'dead' && Math.hypot(p.x - this.enemy.x, p.y - this.enemy.y) < this.enemy.radius + p.radius) {
-                this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
-                this.projectiles.splice(i, 1);
-                continue;
+            if (this.enemy.state !== 'dead') {
+                let hitEnemy = false;
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                        const node = this.enemy.ragdollNodes[n];
+                        if (Math.hypot(p.x - node.x, p.y - node.y) < node.radius + p.radius) {
+                            hitEnemy = true;
+                            // Push the node slightly when hit by projectile
+                            const angle = Math.atan2(node.y - p.y, node.x - p.x);
+                            node.vx += Math.cos(angle) * 0.05;
+                            node.vy += Math.sin(angle) * 0.05;
+                            break;
+                        }
+                    }
+                } else {
+                    if (Math.hypot(p.x - this.enemy.x, p.y - this.enemy.y) < this.enemy.radius + p.radius) {
+                        hitEnemy = true;
+                    }
+                }
+
+                if (hitEnemy) {
+                    this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
+                    this.projectiles.splice(i, 1);
+                    continue;
+                }
             }
         }
     }
@@ -3233,49 +4124,83 @@ class Game {
         const w = this.canvasCtrl.width;
         const h = this.canvasCtrl.height;
 
-        // --- 1. CAR-TO-CAR ELASTIC COLLISION ---
-        const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
-        const touchDist = this.player.radius + this.enemy.radius;
-        
-        if (dist < touchDist) {
-            // Push apart
-            const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
-            const overlap = touchDist - dist;
-            
-            this.player.x += Math.cos(angle) * overlap * 0.5;
-            this.player.y += Math.sin(angle) * overlap * 0.5;
-            this.enemy.x -= Math.cos(angle) * overlap * 0.5;
-            this.enemy.y -= Math.sin(angle) * overlap * 0.5;
-
-            // Elastic bounce momentum calculations
-            const normalX = Math.cos(angle);
-            const normalY = Math.sin(angle);
-            
-            // Relative velocity
-            const rvx = this.player.vx - this.enemy.vx;
-            const rvy = this.player.vy - this.enemy.vy;
-            
-            // Velocity along normal
-            const velAlongNormal = rvx * normalX + rvy * normalY;
-            
-            if (velAlongNormal < 0) {
-                const restitution = 0.85;
-                let impulseScalar = -(1 + restitution) * velAlongNormal;
-                impulseScalar /= (1 / this.player.mass) + (1 / this.enemy.mass);
+        // --- 1. SAMURAI-TO-SAMURAI ELASTIC COLLISION ---
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            this.enemy.ragdollNodes.forEach(node => {
+                const dist = Math.hypot(this.player.x - node.x, this.player.y - node.y);
+                const touchDist = this.player.radius + node.radius;
                 
-                // Apply impulse
-                this.player.vx += (impulseScalar / this.player.mass) * normalX;
-                this.player.vy += (impulseScalar / this.player.mass) * normalY;
-                this.enemy.vx -= (impulseScalar / this.enemy.mass) * normalX;
-                this.enemy.vy -= (impulseScalar / this.enemy.mass) * normalY;
-            }
+                if (dist < touchDist) {
+                    const angle = Math.atan2(this.player.y - node.y, this.player.x - node.x);
+                    const overlap = touchDist - dist;
+                    
+                    this.player.x += Math.cos(angle) * overlap * 0.5;
+                    this.player.y += Math.sin(angle) * overlap * 0.5;
+                    node.x -= Math.cos(angle) * overlap * 0.5;
+                    node.y -= Math.sin(angle) * overlap * 0.5;
+
+                    const normalX = Math.cos(angle);
+                    const normalY = Math.sin(angle);
+                    
+                    const rvx = this.player.vx - node.vx;
+                    const rvy = this.player.vy - node.vy;
+                    const velAlongNormal = rvx * normalX + rvy * normalY;
+                    
+                    if (velAlongNormal < 0) {
+                        const restitution = 0.85;
+                        let impulseScalar = -(1 + restitution) * velAlongNormal;
+                        impulseScalar /= (1 / this.player.mass) + (1 / node.mass);
+                        
+                        this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                        this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                        node.vx -= (impulseScalar / node.mass) * normalX;
+                        node.vy -= (impulseScalar / node.mass) * normalY;
+                    }
+                    
+                    this.audioSynth.playClash();
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
+                }
+            });
+        } else {
+            const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
+            const touchDist = this.player.radius + this.enemy.radius;
             
-            this.audioSynth.playClash();
-            this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
+            if (dist < touchDist) {
+                const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
+                const overlap = touchDist - dist;
+                
+                this.player.x += Math.cos(angle) * overlap * 0.5;
+                this.player.y += Math.sin(angle) * overlap * 0.5;
+                this.enemy.x -= Math.cos(angle) * overlap * 0.5;
+                this.enemy.y -= Math.sin(angle) * overlap * 0.5;
+
+                const normalX = Math.cos(angle);
+                const normalY = Math.sin(angle);
+                
+                const rvx = this.player.vx - this.enemy.vx;
+                const rvy = this.player.vy - this.enemy.vy;
+                const velAlongNormal = rvx * normalX + rvy * normalY;
+                
+                if (velAlongNormal < 0) {
+                    const restitution = 0.85;
+                    let impulseScalar = -(1 + restitution) * velAlongNormal;
+                    impulseScalar /= (1 / this.player.mass) + (1 / this.enemy.mass);
+                    
+                    this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                    this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                    this.enemy.vx -= (impulseScalar / this.enemy.mass) * normalX;
+                    this.enemy.vy -= (impulseScalar / this.enemy.mass) * normalY;
+                }
+                
+                this.audioSynth.playClash();
+                this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
+            }
         }
 
         // --- 2. TOWER RAMMING COLLISION ---
-        // Player car hitting top tower (enemy)
+        // Player samurai hitting top tower (enemy)
         if (this.player.y < 85) {
             let hitTopTower = false;
             if (this.isHardBossRound) {
@@ -3293,18 +4218,16 @@ class Game {
             if (hitTopTower) {
                 const impactForce = Math.abs(this.player.vy);
                 if (impactForce > 0.05) {
-                    // RAM damage scaling by player car mass
                     const ramDmg = this.player.profile.ramDamage;
                     this.topTower.hp = Math.max(0, this.topTower.hp - ramDmg);
                     
-                    // Push player back (recoil)
-                    this.player.vy = 0.28; // bounce down
+                    this.player.vy = 0.28;
                     this.player.y = 88;
                     
-                    // Deal recoil damage to player car itself
                     this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
                     
                     this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
                     this.canvasCtrl.shake(14, 300);
                     this.audioSynth.playHit();
                     
@@ -3313,29 +4236,53 @@ class Game {
             }
         }
 
-        // Enemy car hitting bottom tower (player)
-        if (this.enemy.y > h - 85) {
-            const hitBottomTower = (this.enemy.x + this.enemy.radius >= w / 2 - 80 && this.enemy.x - this.enemy.radius <= w / 2 + 80);
-            if (hitBottomTower) {
-                const impactForce = Math.abs(this.enemy.vy);
-                if (impactForce > 0.05) {
-                    // RAM damage
-                    const ramDmg = this.enemy.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100;
-                    this.bottomTower.hp = Math.max(0, this.bottomTower.hp - ramDmg);
-                    
-                    // Push enemy back (recoil)
-                    this.enemy.vy = -0.28; // bounce up
-                    this.enemy.y = h - 88;
-                    
-                    // Recoil damage to enemy car
-                    this.enemy.takeDamage(30, this.enemy.x, h - 70, this.particles, this.canvasCtrl);
-                    
-                    this.particles.spawnShockwave(this.enemy.x, h - 85, this.enemy.color, 80);
-                    this.canvasCtrl.shake(14, 300);
-                    this.audioSynth.playHit();
-                    
-                    this.checkWinCondition();
+        // Enemy samurai hitting bottom tower (player)
+        let hitBottomTower = false;
+        let hittingNode = this.enemy;
+        
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                const node = this.enemy.ragdollNodes[n];
+                if (node.y + node.radius > h - 85) {
+                    if (node.x + node.radius >= w / 2 - 80 && node.x - node.radius <= w / 2 + 80) {
+                        hitBottomTower = true;
+                        hittingNode = node;
+                        break;
+                    }
                 }
+            }
+        } else {
+            if (this.enemy.y + this.enemy.radius > h - 85) {
+                if (this.enemy.x + this.enemy.radius >= w / 2 - 80 && this.enemy.x - this.enemy.radius <= w / 2 + 80) {
+                    hitBottomTower = true;
+                }
+            }
+        }
+
+        if (hitBottomTower) {
+            const impactForce = Math.abs(hittingNode.vy);
+            if (impactForce > 0.05) {
+                const ramDmg = this.enemy.isBoss ? 150 : (this.enemy.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100);
+                this.bottomTower.hp = Math.max(0, this.bottomTower.hp - ramDmg);
+                
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    this.enemy.ragdollNodes.forEach(node => {
+                        node.vy = -0.28;
+                        node.y -= 10;
+                    });
+                } else {
+                    this.enemy.vy = -0.28;
+                    this.enemy.y = h - 88;
+                }
+                
+                this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
+                
+                this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
+                this.canvasCtrl.shake(14, 300);
+                this.audioSynth.playHit();
+                
+                this.checkWinCondition();
             }
         }
     }

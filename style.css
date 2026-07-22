@@ -926,3 +926,22 @@ h2 {
         opacity: 1;
     }
 }
+
+/* Perk card and custom shop styling additions */
+.weapon-glow.green-card { background-color: var(--neon-green); }
+.weapon-glow.pink-card { background-color: var(--neon-pink); }
+.weapon-glow.cyan-card { background-color: var(--neon-cyan); }
+.weapon-glow.orange-card { background-color: var(--neon-orange); }
+
+.weapon-card:hover {
+    transform: translateY(-4px) scale(1.02);
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+}
+
+.weapon-card.perk-selected {
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+    transform: scale(1.05);
+}
+

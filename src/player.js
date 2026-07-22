@@ -14,6 +14,11 @@ export class Player {
         this.aimDx = 0;
         this.aimDy = 0;
         
+        // Perks system
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
+        
         // Upgrade Levels (synced from state)
         this.upgHealthLvl = 0;
         this.upgPostureLvl = 0;
@@ -34,10 +39,13 @@ export class Player {
         // Visual angle
         this.angle = -Math.PI / 2; // pointing up
         
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+        
         // Size & weight definitions
         this.profiles = {
             katana: {
-                name: "Cyber Car",
+                name: "Cyber Ronin",
                 radius: 20,
                 mass: 1.0,
                 baseHp: 100,
@@ -46,7 +54,7 @@ export class Player {
                 color: "#00f0ff"
             },
             blades: {
-                name: "Plasma Truck",
+                name: "Armored Shogun",
                 radius: 26,
                 mass: 1.8,
                 baseHp: 150,
@@ -55,7 +63,7 @@ export class Player {
                 color: "#ff0077"
             },
             hammer: {
-                name: "Laser Cycle",
+                name: "Shadow Ninja",
                 radius: 16,
                 mass: 0.6,
                 baseHp: 70,
@@ -92,6 +100,10 @@ export class Player {
         this.vy = 0;
         this.state = 'idle';
         this.isAiming = false;
+        
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
     }
 
     // Check if a point is inside the car's body or control zone
@@ -166,33 +178,35 @@ export class Player {
 
         this.game.audioSynth.playShoot();
 
+        const sizeBonus = (this.activeWeaponKey === 'katana' ? 2 : 0);
+
         equippedCannons.forEach(cannon => {
             if (cannon === 'plasma') {
                 // Heavy Plasma: slow moving, huge size, massive damage
-                this.game.spawnProjectile(startX, startY, 0, -speed * 0.65, 16, 'player', 'plasma');
+                this.game.spawnProjectile(startX, startY, 0, -speed * 0.65, 16 + sizeBonus, 'player', 'plasma');
             } else if (cannon === 'rapid') {
                 // Dubbel-Laser: two parallel neon-green lasers
-                this.game.spawnProjectile(startX - 10, startY, 0, -speed, 6, 'player', 'rapid');
-                this.game.spawnProjectile(startX + 10, startY, 0, -speed, 6, 'player', 'rapid');
+                this.game.spawnProjectile(startX - 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
+                this.game.spawnProjectile(startX + 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
             } else if (cannon === 'trio') {
                 // Trio-Laser: three spread shots
-                this.game.spawnProjectile(startX, startY, 0, -speed, 7, 'player', 'trio');
-                this.game.spawnProjectile(startX, startY, -0.12, -speed, 7, 'player', 'trio');
-                this.game.spawnProjectile(startX, startY, 0.12, -speed, 7, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, -0.12, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, 0.12, -speed, 7 + sizeBonus, 'player', 'trio');
             } else if (cannon === 'hagel') {
                 // Hagel-Laser: 5 shots in a wide spread
                 const spreads = [-0.28, -0.14, 0, 0.14, 0.28];
-                spreads.forEach(s => this.game.spawnProjectile(startX, startY, s, -speed, 5, 'player', 'hagel'));
+                spreads.forEach(s => this.game.spawnProjectile(startX, startY, s, -speed, 5 + sizeBonus, 'player', 'hagel'));
             } else if (cannon === 'sniper') {
                 // Sniper-Laser: single ultra-fast pinpoint beam
-                this.game.spawnProjectile(startX, startY, 0, -speed * 2.2, 4, 'player', 'sniper');
+                this.game.spawnProjectile(startX, startY, 0, -speed * 2.2, 4 + sizeBonus, 'player', 'sniper');
             } else if (cannon === 'bakåt') {
                 // Bakåt-Laser: fires both up and down simultaneously
-                this.game.spawnProjectile(startX, startY, 0, -speed, 8, 'player', 'bakåt');
-                this.game.spawnProjectile(startX, startY, 0, speed, 8, 'player', 'bakåt');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'bakåt');
+                this.game.spawnProjectile(startX, startY, 0, speed, 8 + sizeBonus, 'player', 'bakåt');
             } else {
                 // Standard Puls-Laser
-                this.game.spawnProjectile(startX, startY, 0, -speed, 8, 'player', 'laser');
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'laser');
             }
         });
     }
@@ -200,11 +214,35 @@ export class Player {
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
         
-        this.hp = Math.max(0, this.hp - amount);
+        // Check Shield Perk
+        if (this.activePerk === 'shieldCharge' && this.shieldHp > 0) {
+            this.shieldHp = 0;
+            this.shieldCooldown = 12000; // 12 seconds
+            particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 60);
+            canvasController.shake(4, 100);
+            this.game.audioSynth.playParry();
+            
+            // Pushback still applies
+            const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
+            this.vx = Math.cos(pushAngle) * 0.15;
+            this.vy = Math.sin(pushAngle) * 0.15;
+            return;
+        }
+        
+        let dmg = amount;
+        if (this.activeWeaponKey === 'blades') {
+            dmg *= 0.85; // 15% damage reduction
+        }
+        if (this.activePerk === 'overdrive') {
+            dmg *= 1.10; // Take 10% more damage
+        }
+        
+        this.hp = Math.max(0, this.hp - dmg);
         
         // Spark particles
         particleSystem.spawnClashSparks(this.x, this.y, this.color);
-        canvasController.shake(6, 150);
+        canvasController.flash('rgba(255, 0, 51, 0.4)', 220); // brief red damage flash
+        canvasController.shake(8, 180);
         
         if (this.hp <= 0) {
             this.state = 'dead';
@@ -228,6 +266,18 @@ export class Player {
     }
 
     update(deltaTime, width, height, particleSystem) {
+        // Update active shield cooldown
+        if (this.activePerk === 'shieldCharge' && this.state !== 'dead') {
+            if (this.shieldHp === 0) {
+                this.shieldCooldown -= deltaTime;
+                if (this.shieldCooldown <= 0) {
+                    this.shieldHp = 1;
+                    this.shieldCooldown = 0;
+                    particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 35);
+                }
+            }
+        }
+
         if (this.state === 'dead') {
             this.respawnTimer -= deltaTime;
             if (this.respawnTimer <= 0) {
@@ -247,8 +297,9 @@ export class Player {
         if (!this.isAiming) {
             this.x += this.vx * deltaTime;
             this.y += this.vy * deltaTime;
-            this.vx *= Math.pow(this.friction, deltaTime / 16);
-            this.vy *= Math.pow(this.friction, deltaTime / 16);
+            const currentFriction = this.activeWeaponKey === 'hammer' ? 0.99 : this.friction;
+            this.vx *= Math.pow(currentFriction, deltaTime / 16);
+            this.vy *= Math.pow(currentFriction, deltaTime / 16);
             
             let bounced = false;
             if (this.x < this.radius) {
@@ -287,23 +338,53 @@ export class Player {
         const inChargingZone = this.y > height - 150;
         const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
         
-        if (inChargingZone && isMovingSlowly && this.energy < 3 && !this.isAiming) {
-            const chargeNeeded = 1500 / (1 + this.upgPostureLvl * 0.15); // ms
-            this.chargeTimer += deltaTime;
+        if (inChargingZone && isMovingSlowly && !this.isAiming) {
+            // Shadow Ninja charges energy 20% faster
+            const ninjaFactor = this.activeWeaponKey === 'hammer' ? 1.20 : 1.0;
+            const chargeNeeded = 1500 / ((1 + this.upgPostureLvl * 0.15) * ninjaFactor); // ms
             
-            // Spawn charging sparkles
-            if (Math.random() < 0.1) {
-                particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+            if (this.energy < 3) {
+                this.chargeTimer += deltaTime;
+                
+                // Spawn charging sparkles
+                if (Math.random() < 0.1) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+                }
+
+                if (this.chargeTimer >= chargeNeeded) {
+                    this.energy++;
+                    this.chargeTimer = 0;
+                    this.game.audioSynth.playUpgrade();
+                    particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+                }
             }
 
-            if (this.chargeTimer >= chargeNeeded) {
-                this.energy++;
-                this.chargeTimer = 0;
-                this.game.audioSynth.playUpgrade();
-                particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+            // Tower Repair Perk: regenerates 5 HP per second (0.005 HP/ms)
+            if (this.activePerk === 'towerRepair' && this.game.bottomTower.hp < this.game.bottomTower.maxHp) {
+                this.game.bottomTower.hp = Math.min(this.game.bottomTower.maxHp, this.game.bottomTower.hp + 0.005 * deltaTime);
+                if (Math.random() < 0.08) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 15, this.y + (Math.random() - 0.5) * 15, '#00ff66');
+                }
             }
         } else {
             this.chargeTimer = 0;
+        }
+
+        // Maintain trail history
+        if (this.state !== 'dead') {
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.04) {
+                this.trailHistory.push({ x: this.x, y: this.y, angle: this.angle });
+                if (this.trailHistory.length > 4) {
+                    this.trailHistory.shift();
+                }
+            } else {
+                if (this.trailHistory.length > 0) {
+                    this.trailHistory.shift();
+                }
+            }
+        } else {
+            this.trailHistory = [];
         }
     }
 
@@ -326,39 +407,22 @@ export class Player {
             ctx.restore();
         }
 
-        // Draw neon shadow
-        canvasController.setNeonGlow(this.color, 15);
-        ctx.fillStyle = '#0f0f1b';
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 3.5;
-        
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Draw car wheels/bars for variety
-        canvasController.resetNeonGlow();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        // Symmetrical lines representing a cockpit or tires
-        ctx.arc(this.x, this.y, this.radius * 0.6, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Direction line
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(this.x, this.y);
-        ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 6), this.y + Math.sin(this.angle) * (this.radius + 6));
-        ctx.stroke();
-
-        // Draw simple health bar above car
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, 40, 4);
-        ctx.fillStyle = this.color;
-        ctx.fillRect(this.x - 20, this.y - this.radius - 12, (this.hp / this.maxHp) * 40, 4);
+        // Draw the samurai character
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            this.radius, 
+            this.color, 
+            this.angle, 
+            this.activeWeaponKey, 
+            this.isAiming, 
+            this.aimDx, 
+            this.aimDy, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y > this.game.canvasCtrl.height - 150)
+        );
 
         ctx.restore();
     }

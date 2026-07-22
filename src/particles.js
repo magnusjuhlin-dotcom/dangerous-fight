@@ -170,15 +170,15 @@ export class ParticleSystem {
 
     // Sword clash spark shower
     spawnClashSparks(x, y, color) {
-        const count = Math.floor(Math.random() * 15) + 15;
+        const count = Math.floor(Math.random() * 20) + 25; // increased spark count
         
         for (let i = 0; i < count; i++) {
             const angle = Math.random() * Math.PI * 2;
-            const speed = Math.random() * 0.4 + 0.15; // px per ms
+            const speed = Math.random() * 0.55 + 0.20; // wider velocity spread
             const vx = Math.cos(angle) * speed;
             const vy = Math.sin(angle) * speed;
-            const size = Math.random() * 2 + 1.5;
-            const life = Math.random() * 300 + 200; // 0.2 - 0.5 sec
+            const size = Math.random() * 2.5 + 1.5;
+            const life = Math.random() * 400 + 250; // longer lifespan
             
             this.particles.push(new Particle(x, y, vx, vy, color, size, life, 1, 'spark'));
         }

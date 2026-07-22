@@ -12,7 +12,8 @@ export class UIController {
             upgrades: document.getElementById('upgrades-menu'),
             gameover: document.getElementById('game-over-screen'),
             victory: document.getElementById('victory-screen'),
-            hud: document.getElementById('hud')
+            hud: document.getElementById('hud'),
+            perks: document.getElementById('perk-selection-screen')
         };
         
         this.highestWaveVal = document.getElementById('highest-wave-val');
@@ -291,5 +292,73 @@ export class UIController {
         }
         
         this.showScreen('victory');
+    }
+
+    renderPerkSelection(perks, onSelect, audioController) {
+        const grid = document.getElementById('perks-selection-grid');
+        if (!grid) return;
+        
+        grid.innerHTML = ''; // Clear previous content
+        
+        perks.forEach(perk => {
+            const card = document.createElement('div');
+            card.className = 'weapon-card';
+            card.style.flex = '1';
+            card.style.minWidth = '200px';
+            card.style.maxWidth = '250px';
+            card.style.margin = '10px';
+            card.style.display = 'flex';
+            card.style.flexDirection = 'column';
+            card.style.justifyContent = 'space-between';
+            card.style.alignItems = 'center';
+            card.style.textAlign = 'center';
+            card.style.padding = '20px';
+            
+            // Neon glow strip
+            const glow = document.createElement('div');
+            glow.className = `weapon-glow ${perk.color}`;
+            card.appendChild(glow);
+            
+            // Icon
+            const iconEl = document.createElement('div');
+            iconEl.style.fontSize = '3rem';
+            iconEl.style.marginBottom = '12px';
+            iconEl.innerText = perk.icon;
+            card.appendChild(iconEl);
+            
+            // Title
+            const titleEl = document.createElement('h3');
+            titleEl.style.fontSize = '1.05rem';
+            titleEl.style.margin = '8px 0';
+            titleEl.innerText = perk.title;
+            card.appendChild(titleEl);
+            
+            // Description
+            const descEl = document.createElement('p');
+            descEl.style.fontSize = '0.85rem';
+            descEl.style.color = 'rgba(255, 255, 255, 0.7)';
+            descEl.style.lineHeight = '1.4';
+            descEl.style.margin = '12px 0';
+            descEl.innerText = perk.desc;
+            card.appendChild(descEl);
+            
+            // Install button
+            const selectText = document.createElement('div');
+            selectText.className = 'weapon-cost';
+            selectText.innerText = 'INSTALLERA';
+            card.appendChild(selectText);
+            
+            // Click Handler
+            card.addEventListener('click', () => {
+                card.classList.add('perk-selected');
+                audioController.playClick();
+                // Brief delay for visual select animation feedback
+                setTimeout(() => {
+                    onSelect(perk.key);
+                }, 200);
+            });
+            
+            grid.appendChild(card);
+        });
     }
 }
