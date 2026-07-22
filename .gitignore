@@ -18,3 +18,8 @@ jdk.zip
 # OS files
 .DS_Store
 Thumbs.db
+
+# Keystore files
+*.keystore
+*.jks
+
