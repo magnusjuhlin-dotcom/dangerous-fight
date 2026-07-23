@@ -23,3 +23,8 @@ Thumbs.db
 *.keystore
 *.jks
 
+# Downloaded CI Artifacts
+android-release-apk/
+android-release-aab/
+
+
