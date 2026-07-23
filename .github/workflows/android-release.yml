@@ -46,7 +46,7 @@ jobs:
             echo "No KEYSTORE_BASE64 secret provided."
           fi
 
-      - name: Build Release APK and AAB
+      - name: Build APKs (Debug & Release) and AAB
         working-directory: android
         env:
           KEYSTORE_FILE: release.keystore
@@ -54,7 +54,14 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew assembleRelease bundleRelease --stacktrace
+          ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
