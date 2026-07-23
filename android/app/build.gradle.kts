@@ -6,11 +6,11 @@ plugins {
 
 android {
     namespace = "com.noel.dangeroutfight"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.noel.dangeroutfight"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
     }
