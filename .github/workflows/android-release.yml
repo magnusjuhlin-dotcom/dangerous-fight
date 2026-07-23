@@ -40,7 +40,8 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
-            echo "Keystore decoded successfully."
+            echo "Keystore decoded. File size:"
+            ls -la android/app/release.keystore
           else
             echo "No KEYSTORE_BASE64 secret provided."
           fi
