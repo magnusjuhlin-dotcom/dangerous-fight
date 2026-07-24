@@ -8,11 +8,22 @@ export class UpgradeManager {
         this.state = {
             credits: 0,
             highestWave: 1,
+            matchCount: 0,
             equippedWeapon: 'katana',
             unlockedWeapons: {
                 katana: true,
                 blades: false,
                 hammer: false
+            },
+            equippedCannons: ['laser'],
+            unlockedCannons: {
+                laser: true,
+                plasma: false,
+                trio: false,
+                rapid: false,
+                hagel: false,
+                sniper: false,
+                bakåt: false
             },
             upgrades: {
                 health: 0,   // Level 0 to 5
@@ -34,10 +45,21 @@ export class UpgradeManager {
                 // Deep merge state to prevent errors on older/broken schemas
                 if (typeof parsed.credits === 'number') this.state.credits = parsed.credits;
                 if (typeof parsed.highestWave === 'number') this.state.highestWave = parsed.highestWave;
+                if (typeof parsed.matchCount === 'number') this.state.matchCount = parsed.matchCount;
                 if (typeof parsed.equippedWeapon === 'string') this.state.equippedWeapon = parsed.equippedWeapon;
+                // Support both old (string) and new (array) save format
+                if (Array.isArray(parsed.equippedCannons)) {
+                    this.state.equippedCannons = parsed.equippedCannons;
+                } else if (typeof parsed.equippedCannon === 'string') {
+                    this.state.equippedCannons = [parsed.equippedCannon];
+                }
                 
                 if (parsed.unlockedWeapons) {
                     this.state.unlockedWeapons = { ...this.state.unlockedWeapons, ...parsed.unlockedWeapons };
+                }
+                
+                if (parsed.unlockedCannons) {
+                    this.state.unlockedCannons = { ...this.state.unlockedCannons, ...parsed.unlockedCannons };
                 }
                 
                 if (parsed.upgrades) {
@@ -131,6 +153,38 @@ export class UpgradeManager {
         return false;
     }
 
+    buyCannon(cannonKey, cost) {
+        if (this.state.unlockedCannons[cannonKey] === undefined) return false;
+        if (this.state.unlockedCannons[cannonKey]) return true; // Already unlocked
+
+        if (this.spendCredits(cost)) {
+            this.state.unlockedCannons[cannonKey] = true;
+            // Auto-add to active cannons on purchase
+            if (!this.state.equippedCannons.includes(cannonKey)) {
+                this.state.equippedCannons.push(cannonKey);
+            }
+            this.save();
+            return true;
+        }
+        return false;
+    }
+
+    // Toggle a cannon on/off. Laser is always kept active as the base.
+    toggleCannon(cannonKey) {
+        if (!this.state.unlockedCannons[cannonKey]) return false;
+        const idx = this.state.equippedCannons.indexOf(cannonKey);
+        if (idx === -1) {
+            // Activate it
+            this.state.equippedCannons.push(cannonKey);
+        } else {
+            // Deactivate it – but laser can never be removed
+            if (cannonKey === 'laser') return false;
+            this.state.equippedCannons.splice(idx, 1);
+        }
+        this.save();
+        return true;
+    }
+
     /* ROGUELITE IN-RUN CARDS DEFINITIONS */
     
     // Generate 3 randomized in-run cybernetic perk upgrades
@@ -170,6 +224,27 @@ export class UpgradeManager {
                 icon: '💥',
                 desc: 'Gör 30% mer skada med dina slag, men du tar 10% mer skada själv.',
                 color: 'orange-card'
+            },
+            {
+                key: 'timeDilation',
+                title: 'TIDSSAKTNAD',
+                icon: '⏳',
+                desc: 'En perfekt parering (kollision med skott under dash) saktar ner tiden i 2.5 sek.',
+                color: 'green-card'
+            },
+            {
+                key: 'critSlash',
+                title: 'KRITISKT HUGG',
+                icon: '🎯',
+                desc: '20% chans att ditt dash-hugg eller din svärdsvåg gör 100% mer skada.',
+                color: 'cyan-card'
+            },
+            {
+                key: 'towerRepair',
+                title: 'TORN-REPARATION',
+                icon: '🛠️',
+                desc: 'Att stå still i laddningszonen reparerar långsamt ditt torn (+5 HP/sek).',
+                color: 'green-card'
             }
         ];
 

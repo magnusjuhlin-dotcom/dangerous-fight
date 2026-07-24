@@ -4,89 +4,129 @@ export class UIController {
     constructor() {
         this.screens = {
             menu: document.getElementById('main-menu'),
-            weapons: document.getElementById('weapons-menu'),
+            multiplayer: document.getElementById('multiplayer-menu'),
+            lobby: document.getElementById('lobby-screen'),
+            join: document.getElementById('join-room-screen'),
+            weapons: document.getElementById('weapons-menu'), // Garage
+            cannons: document.getElementById('cannons-menu'),
             upgrades: document.getElementById('upgrades-menu'),
-            rewards: document.getElementById('rewards-screen'),
             gameover: document.getElementById('game-over-screen'),
             victory: document.getElementById('victory-screen'),
-            hud: document.getElementById('hud')
+            hud: document.getElementById('hud'),
+            perks: document.getElementById('perk-selection-screen')
         };
         
         this.highestWaveVal = document.getElementById('highest-wave-val');
         this.creditsWeaponsVal = document.getElementById('credits-weapons-val');
+        this.creditsCannonsVal = document.getElementById('credits-cannons-val');
         this.creditsUpgradesVal = document.getElementById('credits-upgrades-val');
         
-        // HUD bars
-        this.playerHpBar = document.getElementById('player-hp-bar');
-        this.playerPostureBar = document.getElementById('player-posture-bar');
-        this.enemyHpBar = document.getElementById('enemy-hp-bar');
-        this.enemyPostureBar = document.getElementById('enemy-posture-bar');
-        this.enemyName = document.getElementById('enemy-name');
-        
-        this.waveDisplay = document.getElementById('wave-display');
-        this.creditsHud = document.getElementById('credits-hud');
+        // Slingshot Arena HUD elements
+        this.topTowerHpBar = document.getElementById('top-tower-hp-bar');
+        this.bottomTowerHpBar = document.getElementById('bottom-tower-hp-bar');
+        this.playerCarHpText = document.getElementById('player-car-hp-text');
+        this.enemyCarHpText = document.getElementById('enemy-car-hp-text');
+        this.playerCarCharge = document.getElementById('player-car-charge');
+        this.shootBtn = document.getElementById('shoot-btn');
+        this.topTowerLabel = document.getElementById('top-tower-label');
+        this.bottomTowerLabel = document.getElementById('bottom-tower-label');
         
         // Game Over and Victory stats
-        this.statWaveReached = document.getElementById('stat-wave-reached');
+        this.statDefeatWinner = document.getElementById('stat-defeat-winner');
         this.statCreditsEarned = document.getElementById('stat-credits-earned');
         this.statVictoryCredits = document.getElementById('stat-victory-credits');
-        this.statVictoryTime = document.getElementById('stat-victory-time');
     }
 
     // Single point to hide everything and display one specific screen
     showScreen(activeScreenId) {
         for (const [key, element] of Object.entries(this.screens)) {
-            if (key === 'hud') {
-                if (activeScreenId === 'hud') {
-                    element.classList.remove('hidden');
-                } else if (activeScreenId === 'rewards' || activeScreenId === 'victory' || activeScreenId === 'gameover') {
-                    // Let HUD be faintly visible behind overlays for gameover/rewards
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+            if (!element) continue;
+            if (key === activeScreenId) {
+                element.classList.remove('hidden');
             } else {
-                if (key === activeScreenId) {
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
+                element.classList.add('hidden');
             }
         }
     }
 
-    // Refresh HUD bars
-    updateHUD(player, enemy, wave, runCredits) {
-        // Player HP
-        const hpPercent = Math.max(0, (player.hp / player.maxHp) * 100);
-        this.playerHpBar.style.width = `${hpPercent}%`;
+    // Refresh HUD bars and statuses
+    updateHUD(player, enemy, isMultiplayer, isClient) {
+        // Towers HP
+        // Symmetrically, player sees themselves at the bottom.
+        // So Bottom Tower is the local player's tower. Top Tower is the opponent/AI's tower.
+        let localTower, remoteTower;
+        let localCarHp, remoteCarHp;
+        let localCarEnergy = 0;
         
-        // Player Posture/Balance
-        const posturePercent = Math.max(0, (player.posture / player.maxPosture) * 100);
-        this.playerPostureBar.style.width = `${posturePercent}%`;
-        
-        // Enemy HP & Posture
-        if (enemy) {
-            this.enemyName.innerText = enemy.name;
-            const enemyHpPercent = Math.max(0, (enemy.hp / enemy.maxHp) * 100);
-            this.enemyHpBar.style.width = `${enemyHpPercent}%`;
-            
-            const enemyPosturePercent = Math.max(0, (enemy.posture / enemy.maxPostureVal) * 100);
-            this.enemyPostureBar.style.width = `${enemyPosturePercent}%`;
+        if (isMultiplayer) {
+            if (isClient) {
+                // Client is Player 2
+                localTower = player.game.topTower;
+                remoteTower = player.game.bottomTower;
+                localCarHp = player.game.enemyCar ? player.game.enemyCar.hp : 100;
+                remoteCarHp = player.hp;
+                localCarEnergy = player.game.enemyCar ? player.game.enemyCar.energy : 0;
+                
+                this.bottomTowerLabel.innerText = "DITT TORN";
+                this.topTowerLabel.innerText = "SPELARE 1:S TORN";
+            } else {
+                // Host is Player 1
+                localTower = player.game.bottomTower;
+                remoteTower = player.game.topTower;
+                localCarHp = player.hp;
+                remoteCarHp = player.game.enemyCar ? player.game.enemyCar.hp : 100;
+                localCarEnergy = player.energy;
+                
+                this.bottomTowerLabel.innerText = "DITT TORN";
+                this.topTowerLabel.innerText = "SPELARE 2:S TORN";
+            }
         } else {
-            this.enemyName.innerText = "SÖKER MOTSTÅNDARE...";
-            this.enemyHpBar.style.width = '0%';
-            this.enemyPostureBar.style.width = '0%';
+            // vs AI
+            localTower = player.game.bottomTower;
+            remoteTower = player.game.topTower;
+            localCarHp = player.hp;
+            remoteCarHp = enemy ? enemy.hp : 100;
+            localCarEnergy = player.energy;
+            
+            this.bottomTowerLabel.innerText = "DITT TORN";
+            this.topTowerLabel.innerText = "DATORNS TORN";
+        }
+
+        // Apply tower percentages
+        const localTowerPercent = Math.max(0, (localTower.hp / localTower.maxHp) * 100);
+        const remoteTowerPercent = Math.max(0, (remoteTower.hp / remoteTower.maxHp) * 100);
+        this.bottomTowerHpBar.style.width = `${localTowerPercent}%`;
+        this.topTowerHpBar.style.width = `${remoteTowerPercent}%`;
+
+        // Apply car HP text
+        this.playerCarHpText.innerText = Math.max(0, Math.ceil(localCarHp));
+        this.enemyCarHpText.innerText = Math.max(0, Math.ceil(remoteCarHp));
+
+        // Update charge indicator lights (max 3)
+        if (this.playerCarCharge) {
+            const lights = this.playerCarCharge.querySelectorAll('.light');
+            lights.forEach((light, idx) => {
+                if (idx < localCarEnergy) {
+                    light.classList.add('active');
+                } else {
+                    light.classList.remove('active');
+                }
+            });
         }
         
-        // Wave badge
-        this.waveDisplay.innerText = `VÅG ${wave}`;
-        
-        // Credits
-        this.creditsHud.innerText = `⚡ ${runCredits}`;
+        // Show/hide shoot button based on energy
+        if (this.shootBtn) {
+            if (localCarEnergy > 0) {
+                this.shootBtn.disabled = false;
+                this.shootBtn.style.opacity = 1;
+            } else {
+                this.shootBtn.disabled = true;
+                this.shootBtn.style.opacity = 0.4;
+            }
+        }
     }
 
-    // Populate weapon shop elements and handle selections
+    // Populate garage (weapon shop) elements and handle selections
     renderWeaponShop(upgradeManager, onEquipOrUnlock, audioController) {
         const state = upgradeManager.state;
         this.creditsWeaponsVal.innerText = state.credits;
@@ -152,7 +192,7 @@ export class UIController {
             } else {
                 const cost = upgradeManager.getUpgradeCost(key, lvl);
                 lvlLabel.innerText = `Nivå ${lvl}/5`;
-                costValSpan.innerText = cost;
+                costValSpan.innerText = Math.round(cost);
                 newBtn.disabled = false;
                 
                 newBtn.addEventListener('click', () => {
@@ -163,48 +203,151 @@ export class UIController {
         });
     }
 
-    // Dynamic generation of roguelite cards for wave rewards
-    renderRewardCards(cards, onSelect, audioController) {
-        const container = document.getElementById('cards-container');
-        container.innerHTML = ''; // Clear prior cards
+    // Populate cannon shop elements and handle selections
+    renderCannonShop(upgradeManager, onEquipOrUnlock, audioController) {
+        const state = upgradeManager.state;
+        this.creditsCannonsVal.innerText = state.credits;
         
-        cards.forEach(card => {
-            const cardEl = document.createElement('div');
-            cardEl.className = `reward-card ${card.color}`;
+        const cannonKeys = ['laser', 'plasma', 'rapid', 'trio', 'hagel', 'sniper', 'bakåt'];
+        const equipped = state.equippedCannons || [state.equippedCannon || 'laser'];
+        cannonKeys.forEach(key => {
+            const card = document.getElementById(`cnn-${key}`);
+            if (!card) return;
             
-            cardEl.innerHTML = `
-                <div class="card-icon" style="color: ${card.color.includes('cyan') ? 'var(--neon-cyan)' : card.color.includes('pink') ? 'var(--neon-pink)' : 'var(--neon-orange)'}">${card.icon}</div>
-                <h3>${card.title}</h3>
-                <p>${card.desc}</p>
-            `;
+            const isUnlocked = state.unlockedCannons[key];
+            const isActive = equipped.includes(key);
+            const costText = card.querySelector('.weapon-cost');
             
-            cardEl.addEventListener('click', () => {
-                audioController.playClick();
-                audioController.playUpgrade();
-                onSelect(card.key);
-            });
+            // Remove previous event listeners by cloning
+            const newCard = card.cloneNode(true);
+            card.parentNode.replaceChild(newCard, card);
             
-            container.appendChild(cardEl);
-        });
+            // Set styles – multi-select checkbox style
+            const newCostText = newCard.querySelector('.weapon-cost');
+            if (!isUnlocked) {
+                newCard.className = 'weapon-card locked';
+                const costs = { plasma: 150, rapid: 200, trio: 300, hagel: 350, sniper: 450, bakåt: 500 };
+                newCostText.innerText = `Kostar ⚡ ${costs[key]}`;
+            } else if (isActive) {
+                newCard.className = 'weapon-card selected';
+                newCostText.innerText = key === 'laser' ? '✅ ALLTID AKTIV' : '✅ AKTIV – klicka för att stänga av';
+            } else {
+                newCard.className = 'weapon-card';
+                newCostText.innerText = '◻ INAKTIV – klicka för att aktivera';
+            }
 
-        this.showScreen('rewards');
+            newCard.addEventListener('click', () => {
+                audioController.playClick();
+                onEquipOrUnlock(key);
+            });
+        });
     }
 
-    // Display Game Over screen
-    renderGameOver(waveReached, creditsEarned) {
-        this.statWaveReached.innerText = waveReached;
-        this.statCreditsEarned.innerText = creditsEarned;
+    // Display Game Over / Defeat screen
+    renderGameOver(creditsEarned, winnerName) {
+        if (this.statDefeatWinner) {
+            this.statDefeatWinner.innerText = winnerName;
+        }
+        if (this.statCreditsEarned) {
+            this.statCreditsEarned.innerText = creditsEarned;
+        }
         this.showScreen('gameover');
     }
 
     // Display Game Victory Screen
-    renderVictory(finalCredits, runDurationSeconds) {
-        this.statVictoryCredits.innerText = finalCredits;
+    renderVictory(finalCredits, isBoss = false) {
+        if (this.statVictoryCredits) {
+            this.statVictoryCredits.innerText = finalCredits;
+        }
         
-        const minutes = Math.floor(runDurationSeconds / 60);
-        const seconds = Math.floor(runDurationSeconds % 60);
-        this.statVictoryTime.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        const titleEl = this.screens.victory.querySelector('h1');
+        const subtitleEl = this.screens.victory.querySelector('.subtitle');
+        if (isBoss) {
+            if (titleEl) {
+                titleEl.innerText = "BOSS BESEGRAAD!";
+                titleEl.setAttribute('data-text', "BOSS BESEGRAAD!");
+            }
+            if (subtitleEl) {
+                subtitleEl.innerText = "Du krossade den svåra bossen!";
+            }
+        } else {
+            if (titleEl) {
+                titleEl.innerText = "STRID VUNNEN!";
+                titleEl.setAttribute('data-text', "SYSTEM VICTORY");
+            }
+            if (subtitleEl) {
+                subtitleEl.innerText = "Du förstörde motståndarens torn.";
+            }
+        }
         
         this.showScreen('victory');
+    }
+
+    renderPerkSelection(perks, onSelect, audioController) {
+        const grid = document.getElementById('perks-selection-grid');
+        if (!grid) return;
+        
+        grid.innerHTML = ''; // Clear previous content
+        
+        perks.forEach(perk => {
+            const card = document.createElement('div');
+            card.className = 'weapon-card';
+            card.style.flex = '1';
+            card.style.minWidth = '200px';
+            card.style.maxWidth = '250px';
+            card.style.margin = '10px';
+            card.style.display = 'flex';
+            card.style.flexDirection = 'column';
+            card.style.justifyContent = 'space-between';
+            card.style.alignItems = 'center';
+            card.style.textAlign = 'center';
+            card.style.padding = '20px';
+            
+            // Neon glow strip
+            const glow = document.createElement('div');
+            glow.className = `weapon-glow ${perk.color}`;
+            card.appendChild(glow);
+            
+            // Icon
+            const iconEl = document.createElement('div');
+            iconEl.style.fontSize = '3rem';
+            iconEl.style.marginBottom = '12px';
+            iconEl.innerText = perk.icon;
+            card.appendChild(iconEl);
+            
+            // Title
+            const titleEl = document.createElement('h3');
+            titleEl.style.fontSize = '1.05rem';
+            titleEl.style.margin = '8px 0';
+            titleEl.innerText = perk.title;
+            card.appendChild(titleEl);
+            
+            // Description
+            const descEl = document.createElement('p');
+            descEl.style.fontSize = '0.85rem';
+            descEl.style.color = 'rgba(255, 255, 255, 0.7)';
+            descEl.style.lineHeight = '1.4';
+            descEl.style.margin = '12px 0';
+            descEl.innerText = perk.desc;
+            card.appendChild(descEl);
+            
+            // Install button
+            const selectText = document.createElement('div');
+            selectText.className = 'weapon-cost';
+            selectText.innerText = 'INSTALLERA';
+            card.appendChild(selectText);
+            
+            // Click Handler
+            card.addEventListener('click', () => {
+                card.classList.add('perk-selected');
+                audioController.playClick();
+                // Brief delay for visual select animation feedback
+                setTimeout(() => {
+                    onSelect(perk.key);
+                }, 200);
+            });
+            
+            grid.appendChild(card);
+        });
     }
 }

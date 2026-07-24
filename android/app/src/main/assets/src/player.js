@@ -1,426 +1,429 @@
-/* DANGEROUS FIGHT - PLAYER CHARACTER CONTROLLER */
+/* DANGEROUS FIGHT - PLAYER CHARACTER (CAR) CONTROLLER */
 
 export class Player {
-    constructor(x, y) {
-        // Core Physics
+    constructor(x, y, game) {
+        this.game = game;
+        
+        // Physics variables
         this.x = x;
         this.y = y;
-        this.radius = 20;
         this.vx = 0;
         this.vy = 0;
-        this.angle = 0; // Direction looking
-
-        // Combat Stats (Dynamic base values, boosted by permanent upgrades)
-        this.baseMaxHp = 100;
-        this.maxHp = 100;
-        this.hp = 100;
-
-        this.baseMaxPosture = 100;
-        this.maxPosture = 100;
-        this.posture = 0; // 0 is perfect balance, maxPosture is Stunned
-
-        // Permanent Upgrade Levels (0 to 5)
+        this.friction = 0.985;
+        this.isAiming = false;
+        this.aimDx = 0;
+        this.aimDy = 0;
+        
+        // Perks system
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
+        
+        // Upgrade Levels (synced from state)
         this.upgHealthLvl = 0;
         this.upgPostureLvl = 0;
         this.upgCreditsLvl = 0;
 
-        // Weapon Profiles
-        this.weapons = {
+        // Vehicle stats based on key
+        this.activeWeaponKey = 'katana'; // default (Cyber Car)
+        
+        // Combat stats
+        this.maxHp = 100;
+        this.hp = 100;
+        this.energy = 0; // max 3 shots
+        this.chargeTimer = 0; // ms
+        
+        this.state = 'idle'; // 'idle', 'dead'
+        this.respawnTimer = 0; // ms
+        
+        // Visual angle
+        this.angle = -Math.PI / 2; // pointing up
+        
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+        
+        // Size & weight definitions (Scaled up by ~75% for Mecha-Shogun graphics)
+        this.profiles = {
             katana: {
-                name: "Cyber Katana",
-                color: "#00f0ff", // Neon Cyan
-                damage: 22,
-                postureDamage: 18,
-                dashSpeed: 1.1,     // px per ms
-                dashDuration: 160,  // ms
-                dashCooldown: 350,  // ms
-                parryWindow: 260    // ms
+                name: "Cyber Ronin",
+                radius: 34,
+                mass: 1.0,
+                baseHp: 100,
+                ramDamage: 100,
+                speedMultiplier: 1.0,
+                color: "#00f0ff"
             },
             blades: {
-                name: "Plasma Dual-Blades",
-                color: "#ff0077", // Neon Pink
-                damage: 13,
-                postureDamage: 9,
-                dashSpeed: 1.45,
-                dashDuration: 110,
-                dashCooldown: 180,
-                parryWindow: 180
+                name: "Armored Shogun",
+                radius: 42,
+                mass: 1.8,
+                baseHp: 150,
+                ramDamage: 180,
+                speedMultiplier: 0.75,
+                color: "#ff0077"
             },
             hammer: {
-                name: "Neon Hammare",
-                color: "#ff9900", // Neon Orange
-                damage: 48,
-                postureDamage: 45,
-                dashSpeed: 0.72,
-                dashDuration: 250,
-                dashCooldown: 750,
-                parryWindow: 200
+                name: "Shadow Ninja",
+                radius: 28,
+                mass: 0.6,
+                baseHp: 70,
+                ramDamage: 70,
+                speedMultiplier: 1.35,
+                color: "#ff9900"
             }
-        };
-        this.activeWeaponKey = 'katana';
-
-        // State Machine
-        this.state = 'idle'; // 'idle', 'dashing', 'parrying', 'hit', 'stunned'
-        this.stateTimer = 0;
-        this.dashCooldownTimer = 0;
-        this.postureRecoveryTimer = 0;
-        
-        // Dash trail logging
-        this.trailPoints = [];
-        this.maxTrailPoints = 8;
-        
-        // Active in-run roguelite perks
-        this.perks = {
-            vampirism: false,       // Heal 10% HP on parry
-            lightningSlash: false,  // Double dash damage
-            shieldCharge: false,    // Automatic energy shield blocking a hit
-            hasShield: false,       // State of energy shield
-            overdrive: false        // Deal 30% more damage, take 10% more
         };
     }
 
-    // Apply permanent main menu upgrades
+    get profile() {
+        return this.profiles[this.activeWeaponKey] || this.profiles.katana;
+    }
+
+    get radius() { return this.profile.radius; }
+    get color() { return this.profile.color; }
+    get mass() { return this.profile.mass; }
+
     applyPermanentUpgrades(levels) {
         this.upgHealthLvl = levels.health || 0;
         this.upgPostureLvl = levels.posture || 0;
         this.upgCreditsLvl = levels.credits || 0;
 
-        this.maxHp = this.baseMaxHp + (this.upgHealthLvl * 15);
-        this.maxPosture = this.baseMaxPosture + (this.upgPostureLvl * 15);
-        
-        // Fully heal on upgrade application
+        // health lvl gives +15 to car maxHp, wait, let's keep car max HP stable or scale it slightly
+        this.maxHp = this.profile.baseHp + (this.upgHealthLvl * 10);
         this.hp = this.maxHp;
-        this.posture = 0;
     }
 
     resetForRun() {
         this.hp = this.maxHp;
-        this.posture = 0;
-        this.state = 'idle';
-        this.stateTimer = 0;
-        this.dashCooldownTimer = 0;
-        this.trailPoints = [];
-        
-        // Reset in-game temporary perks
-        this.perks.vampirism = false;
-        this.perks.lightningSlash = false;
-        this.perks.shieldCharge = false;
-        this.perks.hasShield = false;
-        this.perks.overdrive = false;
-    }
-
-    get activeWeapon() {
-        return this.weapons[this.activeWeaponKey];
-    }
-
-    // Trigger Swipe (Dash and Slash attack)
-    dash(dirX, dirY, audioController, particleSystem) {
-        if (this.state !== 'idle' && this.state !== 'parrying') return false;
-        if (this.dashCooldownTimer > 0) return false;
-
-        const wpn = this.activeWeapon;
-        
-        // Start dashing
-        this.state = 'dashing';
-        this.stateTimer = wpn.dashDuration;
-        this.dashCooldownTimer = wpn.dashCooldown;
-        
-        // Calculate velocity vector
-        this.vx = dirX * wpn.dashSpeed;
-        this.vy = dirY * wpn.dashSpeed;
-        
-        // Face the dash direction
-        this.angle = Math.atan2(dirY, dirX);
-        
-        // Play synthesizer audio
-        audioController.playSlash(this.activeWeaponKey);
-        
-        // Visual effects
-        particleSystem.spawnShockwave(this.x, this.y, wpn.color, 60);
-        this.trailPoints = [{ x: this.x, y: this.y }];
-
-        return true;
-    }
-
-    // Trigger Tap (Parry/Block stance)
-    parry(audioController, particleSystem) {
-        if (this.state !== 'idle') return false;
-
-        const wpn = this.activeWeapon;
-        this.state = 'parrying';
-        this.stateTimer = wpn.parryWindow;
+        this.energy = 0;
+        this.chargeTimer = 0;
         this.vx = 0;
         this.vy = 0;
+        this.state = 'idle';
+        this.isAiming = false;
+        
+        this.activePerk = null;
+        this.shieldHp = 0;
+        this.shieldCooldown = 0;
+    }
 
-        audioController.playDodge();
-        particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 40);
+    // Check if a point is inside the car's body or control zone
+    containsPoint(px, py) {
+        if (this.state === 'dead') return false;
+        const dist = Math.hypot(px - this.x, py - this.y);
+        const height = this.game.canvasCtrl.height;
+        // Accept touches close to the car OR anywhere in the bottom half of the screen (excluding the very edges)
+        return dist <= this.radius * 3.0 || (py > height * 0.5 && py < height - 5);
+    }
 
+    // Called when the user starts a drag
+    startDrag() {
+        if (this.state === 'dead') return false;
+        this.isAiming = true;
+        this.aimDx = 0;
+        this.aimDy = 0;
+        this.vx = 0;
+        this.vy = 0;
         return true;
     }
 
-    // Suffer an attack
-    takeDamage(amount, postureDamage, attackerX, attackerY, audioController, particleSystem, canvasController) {
-        // 1. Check Energy Shield perk
-        if (this.perks.hasShield) {
-            this.perks.hasShield = false;
-            particleSystem.spawnShockwave(this.x, this.y, '#e0a0ff', 90);
-            audioController.playParry();
-            return 'blocked';
-        }
-
-        // Apply overdrive multiplier
-        let actualDamage = amount;
-        if (this.perks.overdrive) {
-            actualDamage *= 1.1; // Take 10% more damage
-        }
-
-        // 2. Reduce health
-        this.hp = Math.max(0, this.hp - actualDamage);
+    // Called when dragging
+    dragMove(dx, dy) {
+        if (!this.isAiming) return;
         
-        // 3. Shift state to hit reaction unless stunned/dead
+        // Cap drag distance to 120 pixels
+        const dist = Math.hypot(dx, dy);
+        if (dist > 120) {
+            this.aimDx = (dx / dist) * 120;
+            this.aimDy = (dy / dist) * 120;
+        } else {
+            this.aimDx = dx;
+            this.aimDy = dy;
+        }
+
+        // Set visual angle facing the launch direction (opposite of drag)
+        if (dist > 5) {
+            this.angle = Math.atan2(-this.aimDy, -this.aimDx);
+        }
+    }
+
+    // Called when user releases drag to launch
+    endDrag() {
+        if (!this.isAiming) return;
+        this.isAiming = false;
+        
+        const dist = Math.hypot(this.aimDx, this.aimDy);
+        if (dist > 15) {
+            // Slingshot velocity scale: launch opposite to drag direction
+            const launchScale = 0.12 * this.profile.speedMultiplier;
+            this.vx = -this.aimDx * launchScale;
+            this.vy = -this.aimDy * launchScale;
+            
+            // Play slingshot sounds
+            this.game.audioSynth.playSlash(this.activeWeaponKey);
+        }
+    }
+
+    // Laser firing – fires all equipped cannons simultaneously from the car's position
+    shoot() {
+        if (this.state === 'dead' || this.energy <= 0) return;
+        
+        this.energy--;
+        const equippedCannons = this.game.upgradeMgr.state.equippedCannons
+            || [this.game.upgradeMgr.state.equippedCannon || 'laser'];
+        
+        // Fire from the car's own position, aimed straight up
+        const startX = this.x;
+        const startY = this.y;
+        const speed = 0.45;
+
+        this.game.audioSynth.playShoot();
+
+        const sizeBonus = (this.activeWeaponKey === 'katana' ? 2 : 0);
+
+        equippedCannons.forEach(cannon => {
+            if (cannon === 'plasma') {
+                // Heavy Plasma: slow moving, huge size, massive damage
+                this.game.spawnProjectile(startX, startY, 0, -speed * 0.65, 16 + sizeBonus, 'player', 'plasma');
+            } else if (cannon === 'rapid') {
+                // Dubbel-Laser: two parallel neon-green lasers
+                this.game.spawnProjectile(startX - 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
+                this.game.spawnProjectile(startX + 10, startY, 0, -speed, 6 + sizeBonus, 'player', 'rapid');
+            } else if (cannon === 'trio') {
+                // Trio-Laser: three spread shots
+                this.game.spawnProjectile(startX, startY, 0, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, -0.12, -speed, 7 + sizeBonus, 'player', 'trio');
+                this.game.spawnProjectile(startX, startY, 0.12, -speed, 7 + sizeBonus, 'player', 'trio');
+            } else if (cannon === 'hagel') {
+                // Hagel-Laser: 5 shots in a wide spread
+                const spreads = [-0.28, -0.14, 0, 0.14, 0.28];
+                spreads.forEach(s => this.game.spawnProjectile(startX, startY, s, -speed, 5 + sizeBonus, 'player', 'hagel'));
+            } else if (cannon === 'sniper') {
+                // Sniper-Laser: single ultra-fast pinpoint beam
+                this.game.spawnProjectile(startX, startY, 0, -speed * 2.2, 4 + sizeBonus, 'player', 'sniper');
+            } else if (cannon === 'bakåt') {
+                // Bakåt-Laser: fires both up and down simultaneously
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'bakåt');
+                this.game.spawnProjectile(startX, startY, 0, speed, 8 + sizeBonus, 'player', 'bakåt');
+            } else {
+                // Standard Puls-Laser
+                this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'laser');
+            }
+        });
+    }
+
+    takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
+        if (this.state === 'dead') return;
+        
+        // Check Shield Perk
+        if (this.activePerk === 'shieldCharge' && this.shieldHp > 0) {
+            this.shieldHp = 0;
+            this.shieldCooldown = 12000; // 12 seconds
+            particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 60);
+            canvasController.shake(4, 100);
+            this.game.audioSynth.playParry();
+            
+            // Pushback still applies
+            const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
+            this.vx = Math.cos(pushAngle) * 0.15;
+            this.vy = Math.sin(pushAngle) * 0.15;
+            return;
+        }
+        
+        let dmg = amount;
+        if (this.activeWeaponKey === 'blades') {
+            dmg *= 0.85; // 15% damage reduction
+        }
+        if (this.activePerk === 'overdrive') {
+            dmg *= 1.10; // Take 10% more damage
+        }
+        
+        this.hp = Math.max(0, this.hp - dmg);
+        
+        // Spark particles
+        particleSystem.spawnClashSparks(this.x, this.y, this.color);
+        canvasController.flash('rgba(255, 0, 51, 0.4)', 220); // brief red damage flash
+        canvasController.shake(8, 180);
+        
         if (this.hp <= 0) {
             this.state = 'dead';
-            return 'dead';
-        }
-
-        const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
-        
-        // 4. Handle Balance/Posture
-        const postureRecoveryModifier = 1 - (this.upgPostureLvl * 0.08); // up to 40% posture damage reduction
-        const netPostureDamage = postureDamage * postureRecoveryModifier;
-        this.posture = Math.min(this.maxPosture, this.posture + netPostureDamage);
-
-        if (this.posture >= this.maxPosture) {
-            // Posture broken! Heavy stun
-            this.state = 'stunned';
-            this.stateTimer = 1200; // 1.2 seconds stun
-            this.vx = Math.cos(pushAngle) * 0.12;
-            this.vy = Math.sin(pushAngle) * 0.12;
+            this.respawnTimer = 3000; // 3 seconds respawn
+            this.vx = 0;
+            this.vy = 0;
+            this.isAiming = false;
             
-            audioController.playHit();
-            canvasController.shake(12, 400);
-            particleSystem.spawnShockwave(this.x, this.y, '#ffff00', 80);
-            particleSystem.spawnDigitalBleed(this.x, this.y, '#ffff00', Math.cos(pushAngle), Math.sin(pushAngle));
-            
-            return 'stunned';
+            // Explosion particles
+            particleSystem.spawnShockwave(this.x, this.y, this.color, 70);
+            for (let i = 0; i < 20; i++) {
+                particleSystem.spawnAmbience(this.game.canvasCtrl.width, this.game.canvasCtrl.height, 2);
+            }
+            this.game.audioSynth.playDefeat();
+        } else {
+            // Pushback force
+            const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
+            this.vx = Math.cos(pushAngle) * 0.22;
+            this.vy = Math.sin(pushAngle) * 0.22;
         }
-
-        // Normal hit reaction
-        this.state = 'hit';
-        this.stateTimer = 220; // Short flinch
-        
-        // Slight knockback
-        this.vx = Math.cos(pushAngle) * 0.2;
-        this.vy = Math.sin(pushAngle) * 0.2;
-
-        audioController.playHit();
-        canvasController.shake(6, 200);
-        particleSystem.spawnDigitalBleed(this.x, this.y, '#ffffff', Math.cos(pushAngle), Math.sin(pushAngle));
-
-        return 'hit';
     }
 
     update(deltaTime, width, height, particleSystem) {
-        // Cooldown timer tickdown
-        if (this.dashCooldownTimer > 0) {
-            this.dashCooldownTimer -= deltaTime;
-        }
-
-        // Posture recovery (slowly recover balance over time when not hit)
-        if (this.state !== 'hit' && this.state !== 'stunned') {
-            const recoverySpeed = (0.015 + (this.upgPostureLvl * 0.005)) * deltaTime; // Speed increases with upgrade level
-            this.posture = Math.max(0, this.posture - recoverySpeed);
-        }
-
-        // Dynamic shield recharging perk
-        if (this.perks.shieldCharge && !this.perks.hasShield) {
-            if (!this.shieldRechargeTime) this.shieldRechargeTime = 12000; // 12 seconds cooldown
-            this.shieldRechargeTime -= deltaTime;
-            if (this.shieldRechargeTime <= 0) {
-                this.perks.hasShield = true;
-                this.shieldRechargeTime = 12000;
-                particleSystem.spawnShockwave(this.x, this.y, '#e0a0ff', 50);
+        // Update active shield cooldown
+        if (this.activePerk === 'shieldCharge' && this.state !== 'dead') {
+            if (this.shieldHp === 0) {
+                this.shieldCooldown -= deltaTime;
+                if (this.shieldCooldown <= 0) {
+                    this.shieldHp = 1;
+                    this.shieldCooldown = 0;
+                    particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 35);
+                }
             }
         }
 
-        // State Machine ticks
-        if (this.stateTimer > 0) {
-            this.stateTimer -= deltaTime;
-            
-            if (this.state === 'dashing') {
-                // Keep moving player
-                this.x += this.vx * deltaTime;
-                this.y += this.vy * deltaTime;
-                
-                // Add points to sword trail
-                this.trailPoints.push({ x: this.x, y: this.y });
-                if (this.trailPoints.length > this.maxTrailPoints) {
-                    this.trailPoints.shift();
-                }
-
-                // Append trail in particle system for smooth display
-                if (this.trailPoints.length >= 2) {
-                    particleSystem.addSwordTrail(this.trailPoints, this.activeWeapon.color, 4);
-                }
-            } else if (this.state === 'hit' || this.state === 'stunned') {
-                // Drag friction on knockback
-                this.x += this.vx * deltaTime;
-                this.y += this.vy * deltaTime;
-                this.vx *= Math.pow(0.92, deltaTime / 16);
-                this.vy *= Math.pow(0.92, deltaTime / 16);
-            }
-
-            if (this.stateTimer <= 0) {
-                // Return to idle state
+        if (this.state === 'dead') {
+            this.respawnTimer -= deltaTime;
+            if (this.respawnTimer <= 0) {
+                // Respawn
                 this.state = 'idle';
+                this.hp = this.maxHp;
+                this.x = width / 2;
+                this.y = height - 120;
                 this.vx = 0;
                 this.vy = 0;
-                this.trailPoints = [];
+                particleSystem.spawnShockwave(this.x, this.y, this.color, 40);
+            }
+            return;
+        }
+
+        // Apply friction
+        if (!this.isAiming) {
+            this.x += this.vx * deltaTime;
+            this.y += this.vy * deltaTime;
+            const currentFriction = this.activeWeaponKey === 'hammer' ? 0.99 : this.friction;
+            this.vx *= Math.pow(currentFriction, deltaTime / 16);
+            this.vy *= Math.pow(currentFriction, deltaTime / 16);
+            
+            let bounced = false;
+            if (this.x < this.radius) {
+                this.x = this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            } else if (this.x > width - this.radius) {
+                this.x = width - this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            }
+            
+            if (this.y < this.radius) {
+                this.y = this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            } else if (this.y > height - this.radius) {
+                this.y = height - this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            }
+            
+            if (bounced && Math.hypot(this.vx, this.vy) > 0.03) {
+                this.game.audioSynth.playClick();
+            }
+            
+            // Cap velocities
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.05) {
+                this.angle = Math.atan2(this.vy, this.vx);
             }
         }
 
-        // Keep player strictly inside the canvas viewport bounds (with bounce)
-        const margin = this.radius + 10;
-        if (this.x < margin) { this.x = margin; this.vx = 0; }
-        if (this.x > width - margin) { this.x = width - margin; this.vx = 0; }
-        if (this.y < margin) { this.y = margin; this.vy = 0; }
-        if (this.y > height - margin) { this.y = height - margin; this.vy = 0; }
+        // --- ENERGY CHARGING LOGIC ---
+        // Player charging zone is at the bottom (y > height - 150)
+        const inChargingZone = this.y > height - 150;
+        const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
+        
+        if (inChargingZone && isMovingSlowly && !this.isAiming) {
+            // Shadow Ninja charges energy 20% faster
+            const ninjaFactor = this.activeWeaponKey === 'hammer' ? 1.20 : 1.0;
+            const chargeNeeded = 1500 / ((1 + this.upgPostureLvl * 0.15) * ninjaFactor); // ms
+            
+            if (this.energy < 3) {
+                this.chargeTimer += deltaTime;
+                
+                // Spawn charging sparkles
+                if (Math.random() < 0.1) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+                }
+
+                if (this.chargeTimer >= chargeNeeded) {
+                    this.energy++;
+                    this.chargeTimer = 0;
+                    this.game.audioSynth.playUpgrade();
+                    particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+                }
+            }
+
+            // Tower Repair Perk: regenerates 5 HP per second (0.005 HP/ms)
+            if (this.activePerk === 'towerRepair' && this.game.bottomTower.hp < this.game.bottomTower.maxHp) {
+                this.game.bottomTower.hp = Math.min(this.game.bottomTower.maxHp, this.game.bottomTower.hp + 0.005 * deltaTime);
+                if (Math.random() < 0.08) {
+                    particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 15, this.y + (Math.random() - 0.5) * 15, '#00ff66');
+                }
+            }
+        } else {
+            this.chargeTimer = 0;
+        }
+
+        // Maintain trail history
+        if (this.state !== 'dead') {
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.04) {
+                this.trailHistory.push({ x: this.x, y: this.y, angle: this.angle });
+                if (this.trailHistory.length > 4) {
+                    this.trailHistory.shift();
+                }
+            } else {
+                if (this.trailHistory.length > 0) {
+                    this.trailHistory.shift();
+                }
+            }
+        } else {
+            this.trailHistory = [];
+        }
     }
 
     draw(ctx, canvasController) {
-        const wpn = this.activeWeapon;
-        
+        if (this.state === 'dead') return;
+
         ctx.save();
         
-        // Draw Neon Shadow for player circle
-        canvasController.setNeonGlow(wpn.color, 20);
-        
-        // Draw outer glowing player body
-        ctx.strokeStyle = wpn.color;
-        ctx.lineWidth = 3;
-        ctx.fillStyle = '#0a0a14';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Draw cybernetic grid core inside player
-        canvasController.resetNeonGlow();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(this.x - this.radius + 6, this.y);
-        ctx.lineTo(this.x + this.radius - 6, this.y);
-        ctx.moveTo(this.x, this.y - this.radius + 6);
-        ctx.lineTo(this.x, this.y + this.radius - 6);
-        ctx.stroke();
-        
-        // Draw face/indicator facing direction
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(this.x, this.y);
-        ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 5), this.y + Math.sin(this.angle) * (this.radius + 5));
-        ctx.stroke();
-
-        // Draw weapon blades depending on selected weapon
-        this.drawWeaponsGraphic(ctx, canvasController);
-
-        // State specific overlays
-        if (this.state === 'parrying') {
-            // Draw expanding energy deflection barrier
-            canvasController.setNeonGlow('#ffffff', 15);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        // Aiming line
+        if (this.isAiming) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
             ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius + 15, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-
-        if (this.perks.hasShield) {
-            // Draw persistent energy shield ring
-            canvasController.setNeonGlow('#e0a0ff', 12);
-            ctx.strokeStyle = 'rgba(224, 160, 255, 0.5)';
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([4, 6]);
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius + 8, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-        }
-
-        if (this.state === 'stunned') {
-            // Draw dizzy rotating stars/symbols above player
-            const numStars = 3;
-            const time = performance.now() * 0.005;
-            canvasController.setNeonGlow('#ffff00', 8);
-            ctx.fillStyle = '#ffff00';
-            for (let i = 0; i < numStars; i++) {
-                const angle = time + (i * Math.PI * 2 / numStars);
-                const sx = this.x + Math.cos(angle) * 16;
-                const sy = this.y - this.radius - 12 + Math.sin(angle) * 4;
-                ctx.fillRect(sx - 2, sy - 2, 4, 4);
-            }
-        }
-
-        ctx.restore();
-    }
-
-    drawWeaponsGraphic(ctx, canvasController) {
-        ctx.save();
-        const color = this.activeWeapon.color;
-        canvasController.setNeonGlow(color, 12);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3.5;
-        
-        if (this.activeWeaponKey === 'katana') {
-            // Drawn extending behind the direction line
-            const katanaAngle = this.angle + Math.PI * 0.85; // drawn angled back
-            ctx.beginPath();
-            ctx.moveTo(this.x + Math.cos(katanaAngle) * 5, this.y + Math.sin(katanaAngle) * 5);
-            ctx.lineTo(this.x + Math.cos(katanaAngle) * (this.radius + 18), this.y + Math.sin(katanaAngle) * (this.radius + 18));
-            ctx.stroke();
-            
-        } else if (this.activeWeaponKey === 'blades') {
-            // Draw two symmetrical blades on the left and right sides
-            const bladeLeft = this.angle + Math.PI * 0.55;
-            const bladeRight = this.angle - Math.PI * 0.55;
-            
-            ctx.beginPath();
-            ctx.moveTo(this.x + Math.cos(bladeLeft) * 5, this.y + Math.sin(bladeLeft) * 5);
-            ctx.lineTo(this.x + Math.cos(bladeLeft) * (this.radius + 10), this.y + Math.sin(bladeLeft) * (this.radius + 10));
-            ctx.moveTo(this.x + Math.cos(bladeRight) * 5, this.y + Math.sin(bladeRight) * 5);
-            ctx.lineTo(this.x + Math.cos(bladeRight) * (this.radius + 10), this.y + Math.sin(bladeRight) * (this.radius + 10));
-            ctx.stroke();
-            
-        } else if (this.activeWeaponKey === 'hammer') {
-            // Draw a heavy shaft with a large rectangular neon hammer head
-            const shaftAngle = this.angle + Math.PI * 0.95;
-            const shaftLength = this.radius + 14;
-            const headX = this.x + Math.cos(shaftAngle) * shaftLength;
-            const headY = this.y + Math.sin(shaftAngle) * shaftLength;
-            
-            // Draw shaft
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 6]);
             ctx.beginPath();
             ctx.moveTo(this.x, this.y);
-            ctx.lineTo(headX, headY);
+            // Draw in opposite direction of drag
+            ctx.lineTo(this.x - this.aimDx * 2, this.y - this.aimDy * 2);
             ctx.stroke();
-            
-            // Draw Hammer head
-            ctx.strokeStyle = color;
-            ctx.fillStyle = '#140c00';
-            ctx.lineWidth = 3;
-            
-            ctx.translate(headX, headY);
-            ctx.rotate(shaftAngle + Math.PI / 2);
-            ctx.beginPath();
-            ctx.rect(-10, -6, 20, 12);
-            ctx.fill();
-            ctx.stroke();
+            ctx.restore();
         }
-        
+
+        // Draw the samurai character
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            this.radius, 
+            this.color, 
+            this.angle, 
+            this.activeWeaponKey, 
+            this.isAiming, 
+            this.aimDx, 
+            this.aimDy, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y > this.game.canvasCtrl.height - 150)
+        );
+
         ctx.restore();
     }
 }

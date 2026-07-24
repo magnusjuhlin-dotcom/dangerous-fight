@@ -1,526 +1,502 @@
-/* DANGEROUS FIGHT - CYBERPUNK 1V1 BOSS AI CONTROLLER */
+/* DANGEROUS FIGHT - CYBERPUNK 1V1 BOSS AI & REMOTE PLAYER REPLICA */
 
 export class Enemy {
-    constructor(x, y, wave) {
+    constructor(x, y, game) {
+        this.game = game;
+        
+        // Physics variables
         this.x = x;
         this.y = y;
-        this.radius = 20;
         this.vx = 0;
         this.vy = 0;
-        this.angle = 0;
-        this.wave = wave;
-
-        // Initialize unique Boss Profiles depending on Wave
-        this.initBossProfile(wave);
+        this.friction = 0.985;
+        this.radius = 34;
+        this.mass = 1.0;
+        this.color = "#ff0077"; // Neon Pink
         
-        // State Machine
-        this.state = 'idle'; // 'idle', 'moving', 'charging', 'attacking', 'stunned', 'hit', 'dead'
-        this.stateTimer = 0;
-        this.aiDecisionTimer = Math.random() * 800 + 400; // Time until next action choice
-
-        // Telegraph indicators
-        this.telegraphType = 'line'; // 'line', 'circle', 'cone'
-        this.telegraphProgress = 0; // 0 to 1
-        this.telegraphTargetX = 0;
-        this.telegraphTargetY = 0;
-        this.telegraphWidth = 20;
-        this.telegraphRange = 150;
+        // Combat stats
+        this.maxHp = 100;
+        this.hp = 100;
+        this.energy = 0; // max 3 shots
+        this.chargeTimer = 0; // ms
+        this.isBoss = false;
         
-        // Parry opening window (flashes white at end of telegraph)
-        this.parryFlashTimer = 0;
-        this.parryFlashDuration = 160; // ms window to parry
-
-        this.trailPoints = [];
+        this.state = 'idle'; // 'idle', 'dead'
+        this.respawnTimer = 0; // ms
+        
+        // Visual angle
+        this.angle = Math.PI / 2; // pointing down
+        
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+        
+        // AI behavior state machine
+        this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
+        this.aiTimer = 1000; // time until next AI action
+        
+        // Profiles for multiplayer vehicle matching (Scaled up by ~75%)
+        this.profiles = {
+            katana: { radius: 34, mass: 1.0, color: "#ff0077" }, // Cyber Car
+            blades: { radius: 42, mass: 1.8, color: "#ff0088" }, // Plasma Truck
+            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }  // Laser Cycle
+        };
     }
 
-    initBossProfile(wave) {
-        // Base profile setup based on wave structure
-        const bossId = ((wave - 1) % 5) + 1; // Loop profiles 1 to 5
+    resetForRun(isBoss = false) {
+        this.isBoss = isBoss;
+        if (isBoss) {
+            this.maxHp = 500;
+            this.radius = 42; // Torso radius (was 24)
+            this.mass = 2.5;
+            this.color = 'crimson';
+            
+            // Initialize scaled ragdoll nodes
+            this.ragdollNodes = [
+                { name: 'torso', x: this.x, y: this.y, vx: 0, vy: 0, radius: 42, mass: 2.0, color: 'crimson' },
+                { name: 'head', x: this.x, y: this.y - 52, vx: 0, vy: 0, radius: 24, mass: 1.0, color: '#ff0055' },
+                { name: 'leftHand', x: this.x - 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'rightHand', x: this.x + 55, y: this.y - 12, vx: 0, vy: 0, radius: 18, mass: 0.7, color: '#ff0077' },
+                { name: 'leftFoot', x: this.x - 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' },
+                { name: 'rightFoot', x: this.x + 30, y: this.y + 52, vx: 0, vy: 0, radius: 18, mass: 0.8, color: '#990033' }
+            ];
 
-        switch (bossId) {
-            case 1:
-                this.name = "CYBER KATANA RUNNER";
-                this.color = "#ff0055"; // Neon Pink/Red
-                this.maxHp = 80 + wave * 20;
-                this.maxPosture = 80 + wave * 10;
-                this.damage = 15 + wave * 2;
-                this.postureDamage = 15 + wave * 2;
-                this.speed = 0.08 + wave * 0.005;
-                this.behaviorType = 'balanced';
-                break;
-                
-            case 2:
-                this.name = "PLASMA SPEARHUNTER";
-                this.color = "#ffaa00"; // Orange
-                this.maxHp = 100 + wave * 20;
-                this.maxPosture = 70 + wave * 10;
-                this.damage = 18 + wave * 2;
-                this.postureDamage = 12 + wave * 2;
-                this.speed = 0.11 + wave * 0.005;
-                this.behaviorType = 'agile_lunge';
-                break;
+            // Define distance constraints between nodes
+            this.ragdollConstraints = [
+                [0, 1, 52], // torso to head
+                [0, 2, 55], // torso to leftHand
+                [0, 3, 55], // torso to rightHand
+                [0, 4, 52], // torso to leftFoot
+                [0, 5, 52], // torso to rightFoot
+                [1, 2, 60], // head to leftHand
+                [1, 3, 60], // head to rightHand
+                [4, 5, 45]  // leftFoot to rightFoot
+            ];
+        } else {
+            this.ragdollNodes = null;
+            this.ragdollConstraints = null;
+            this.maxHp = 100;
+            this.radius = 34;
+            this.mass = 1.0;
+            this.color = "#ff0077";
+        }
+        this.hp = this.maxHp;
+        this.energy = 0;
+        this.chargeTimer = 0;
+        this.vx = 0;
+        this.vy = 0;
+        this.state = 'idle';
+        this.aiState = 'idle';
+        this.aiTimer = 1000;
+        
+        // Trail history for ghost afterimages
+        this.trailHistory = [];
+    }
 
-            case 3:
-                this.name = "IRON GRAVITY SLAMMER";
-                this.color = "#a000ff"; // Dark Purple
-                this.maxHp = 160 + wave * 25;
-                this.maxPosture = 140 + wave * 15;
-                this.damage = 30 + wave * 3;
-                this.postureDamage = 35 + wave * 4;
-                this.speed = 0.05 + wave * 0.003;
-                this.behaviorType = 'heavy_unblockable';
-                break;
+    resetRagdollPositions() {
+        if (!this.isBoss || !this.ragdollNodes) return;
+        
+        const torso = this.ragdollNodes[0];
+        const head = this.ragdollNodes[1];
+        const leftHand = this.ragdollNodes[2];
+        const rightHand = this.ragdollNodes[3];
+        const leftFoot = this.ragdollNodes[4];
+        const rightFoot = this.ragdollNodes[5];
+        
+        torso.x = this.x; torso.y = this.y; torso.vx = 0; torso.vy = 0;
+        head.x = this.x; head.y = this.y - 32; head.vx = 0; head.vy = 0;
+        leftHand.x = this.x - 34; leftHand.y = this.y - 8; leftHand.vx = 0; leftHand.vy = 0;
+        rightHand.x = this.x + 34; rightHand.y = this.y - 8; rightHand.vx = 0; rightHand.vy = 0;
+        leftFoot.x = this.x - 18; leftFoot.y = this.y + 32; leftFoot.vx = 0; leftFoot.vy = 0;
+        rightFoot.x = this.x + 18; rightFoot.y = this.y + 32; rightFoot.vx = 0; rightFoot.vy = 0;
+    }
 
-            case 4:
-                this.name = "NEO PHANTOM SHADOW";
-                this.color = "#00ff66"; // Neon Green
-                this.maxHp = 90 + wave * 20;
-                this.maxPosture = 90 + wave * 10;
-                this.damage = 16 + wave * 2;
-                this.postureDamage = 15 + wave * 2;
-                this.speed = 0.09 + wave * 0.005;
-                this.behaviorType = 'teleporter';
-                break;
+    setVehicleType(type) {
+        const p = this.profiles[type] || this.profiles.katana;
+        this.radius = p.radius;
+        this.mass = p.mass;
+        this.color = p.color;
+    }
 
-            case 5:
-            default:
-                this.name = `APEX MASTER: PROTO-${wave}`;
-                this.color = "#ffff00"; // Neon Yellow
-                this.maxHp = 180 + wave * 30;
-                this.maxPosture = 150 + wave * 15;
-                this.damage = 25 + wave * 3;
-                this.postureDamage = 25 + wave * 3;
-                this.speed = 0.12 + wave * 0.005;
-                this.behaviorType = 'apex_boss';
-                break;
+    takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
+        if (this.state === 'dead') return;
+        
+        let dmg = amount;
+        
+        // Apply player active perks
+        const player = this.game.player;
+        if (player && player.state !== 'dead') {
+            let mult = 1.0;
+            
+            // Overdrive perk: +30% damage dealt
+            if (player.activePerk === 'overdrive') {
+                mult += 0.30;
+            }
+            
+            // Lightning Slash: +30% damage if player is dashing (speed > 0.15)
+            if (player.activePerk === 'lightningSlash' && Math.hypot(player.vx, player.vy) > 0.15) {
+                mult += 0.30;
+            }
+            
+            dmg *= mult;
+            
+            // Crit Slash perk: 20% chance of double damage
+            if (player.activePerk === 'critSlash' && Math.random() < 0.20) {
+                dmg *= 2.0;
+                // Red glowing crit flash visual
+                particleSystem.spawnShockwave(attackerX, attackerY, '#ff3300', 45);
+            }
         }
 
-        this.hp = this.maxHp;
-        this.posture = 0;
-        this.maxPostureVal = this.maxPosture;
-    }
-
-    // Process damage taken from player attacks
-    takeDamage(amount, postureDamage, playerX, playerY, audioController, particleSystem, canvasController) {
-        if (this.state === 'dead') return 'dead';
-
-        this.hp = Math.max(0, this.hp - amount);
+        this.hp = Math.max(0, this.hp - dmg);
+        
+        // Spark particles at closest hit node
+        let sparkX = this.x;
+        let sparkY = this.y;
+        if (this.isBoss && this.ragdollNodes) {
+            let minDist = Infinity;
+            this.ragdollNodes.forEach(node => {
+                const dist = Math.hypot(node.x - attackerX, node.y - attackerY);
+                if (dist < minDist) {
+                    minDist = dist;
+                    sparkX = node.x;
+                    sparkY = node.y;
+                }
+            });
+        }
+        particleSystem.spawnClashSparks(sparkX, sparkY, this.color);
+        canvasController.flash('rgba(0, 240, 255, 0.2)', 180); // Cyan flash when damaging enemy
+        canvasController.shake(6, 150);
         
         if (this.hp <= 0) {
             this.state = 'dead';
-            particleSystem.spawnShockwave(this.x, this.y, this.color, 120);
-            particleSystem.spawnDigitalBleed(this.x, this.y, this.color, this.x - playerX, this.y - playerY);
-            return 'dead';
-        }
-
-        const pushAngle = Math.atan2(this.y - playerY, this.x - playerX);
-
-        // Balance reduction
-        this.posture = Math.min(this.maxPostureVal, this.posture + postureDamage);
-
-        if (this.posture >= this.maxPostureVal) {
-            // Balance broken! Dizzy stun opening
-            this.state = 'stunned';
-            this.stateTimer = 1600; // 1.6 seconds stun opening
-            this.vx = Math.cos(pushAngle) * 0.1;
-            this.vy = Math.sin(pushAngle) * 0.1;
-
-            audioController.playHit();
-            canvasController.shake(10, 300);
-            particleSystem.spawnShockwave(this.x, this.y, '#ffff00', 80);
-            particleSystem.spawnDigitalBleed(this.x, this.y, '#ffff00', Math.cos(pushAngle), Math.sin(pushAngle));
+            this.respawnTimer = 3000; // 3 seconds respawn
+            this.vx = 0;
+            this.vy = 0;
+            this.aiState = 'idle';
+            this.aiTimer = 3000;
             
-            return 'stunned';
-        }
-
-        // Flinch from hit
-        if (this.state !== 'stunned' && this.state !== 'attacking') {
-            this.state = 'hit';
-            this.stateTimer = 180;
-            this.vx = Math.cos(pushAngle) * 0.15;
-            this.vy = Math.sin(pushAngle) * 0.15;
+            // Explosion particles on all joints if boss
+            if (this.isBoss && this.ragdollNodes) {
+                this.ragdollNodes.forEach(node => {
+                    particleSystem.spawnShockwave(node.x, node.y, node.color, 45);
+                });
+            } else {
+                particleSystem.spawnShockwave(this.x, this.y, this.color, 70);
+            }
             
-            audioController.playHit();
-            particleSystem.spawnDigitalBleed(this.x, this.y, this.color, Math.cos(pushAngle), Math.sin(pushAngle));
+            for (let i = 0; i < 20; i++) {
+                particleSystem.spawnAmbience(this.game.canvasCtrl.width, this.game.canvasCtrl.height, 2);
+            }
+            this.game.audioSynth.playVictory();
+        } else {
+            // Pushback force
+            const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
+            if (this.isBoss && this.ragdollNodes) {
+                this.ragdollNodes.forEach(node => {
+                    node.vx += Math.cos(pushAngle) * 0.18;
+                    node.vy += Math.sin(pushAngle) * 0.18;
+                });
+            } else {
+                this.vx = Math.cos(pushAngle) * 0.22;
+                this.vy = Math.sin(pushAngle) * 0.22;
+            }
         }
-
-        return 'hit';
     }
 
-    // Trigger stun manually due to a perfect player parry
-    triggerParriedStun(audioController, particleSystem, canvasController) {
-        this.state = 'stunned';
-        this.stateTimer = 2000; // 2 seconds stun opening!
-        this.posture = this.maxPostureVal; // Fill posture bar
-        this.vx = 0;
-        this.vy = 0;
-
-        audioController.playParry();
-        canvasController.shake(8, 250);
-        particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 80);
-    }
-
-    update(deltaTime, player, audioController, particleSystem, canvasController, canvasWidth, canvasHeight) {
-        // Posture decay over time
-        if (this.state !== 'hit' && this.state !== 'stunned') {
-            this.posture = Math.max(0, this.posture - 0.015 * deltaTime);
-        }
-
-        // Handle states
-        if (this.stateTimer > 0) {
-            this.stateTimer -= deltaTime;
-            
-            if (this.state === 'charging') {
-                // Focus on player location during charge
-                this.angle = Math.atan2(player.y - this.y, player.x - this.x);
-                
-                // Track telegraph progress
-                const chargeDuration = this.getChargeDuration();
-                this.telegraphProgress = Math.min(1, 1 - (this.stateTimer / chargeDuration));
-                
-                // Track parry window right before attack lands
-                if (this.stateTimer <= this.parryFlashDuration) {
-                    this.parryFlashTimer = this.stateTimer;
+    update(deltaTime, player, audioController, particleSystem, canvasController, width, height) {
+        if (this.state === 'dead') {
+            this.respawnTimer -= deltaTime;
+            if (this.respawnTimer <= 0) {
+                // Respawn
+                this.state = 'idle';
+                this.hp = this.maxHp;
+                this.x = width / 2;
+                this.y = 120;
+                this.vx = 0;
+                this.vy = 0;
+                if (this.isBoss) {
+                    this.resetRagdollPositions();
                 }
-            } else if (this.state === 'attacking') {
-                // Execute charge movement
-                this.x += this.vx * deltaTime;
-                this.y += this.vy * deltaTime;
-                
-                this.trailPoints.push({ x: this.x, y: this.y });
-                if (this.trailPoints.length > 5) this.trailPoints.shift();
-                
-                if (this.trailPoints.length >= 2) {
-                    particleSystem.addSwordTrail(this.trailPoints, this.color, 4);
-                }
-            } else if (this.state === 'hit' || this.state === 'stunned') {
-                // Slow down from knockback
-                this.x += this.vx * deltaTime;
-                this.y += this.vy * deltaTime;
-                this.vx *= Math.pow(0.92, deltaTime / 16);
-                this.vy *= Math.pow(0.92, deltaTime / 16);
+                particleSystem.spawnShockwave(this.x, this.y, this.color, 40);
             }
-
-            if (this.stateTimer <= 0) {
-                if (this.state === 'charging') {
-                    // Start actual attack phase!
-                    this.state = 'attacking';
-                    this.stateTimer = this.getAttackDuration();
-                    
-                    const attackAngle = Math.atan2(this.telegraphTargetY - this.y, this.telegraphTargetX - this.x);
-                    const speed = this.getAttackSpeed();
-                    this.vx = Math.cos(attackAngle) * speed;
-                    this.vy = Math.sin(attackAngle) * speed;
-                    this.angle = attackAngle;
-                    
-                    audioController.playSlash('katana');
-                    this.trailPoints = [{ x: this.x, y: this.y }];
-                    
-                    // Reset flash trigger
-                    this.parryFlashTimer = 0;
-                } else {
-                    // Attack or Stun done, back to idle
-                    this.state = 'idle';
-                    this.vx = 0;
-                    this.vy = 0;
-                    this.trailPoints = [];
-                }
-            }
-        }
-
-        // AI Decision Tree
-        if (this.state === 'idle' || this.state === 'moving') {
-            this.aiDecisionTimer -= deltaTime;
-            
-            // Re-aim at player
-            const dx = player.x - this.x;
-            const dy = player.y - this.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            this.angle = Math.atan2(dy, dx);
-
-            if (this.aiDecisionTimer <= 0) {
-                this.chooseNextAction(dist, player, particleSystem, audioController);
-            }
-
-            // Perform movement
-            if (this.state === 'moving') {
-                this.x += this.vx * deltaTime;
-                this.y += this.vy * deltaTime;
-            }
-        }
-
-        // Keep inside bounds
-        const margin = this.radius + 10;
-        if (this.x < margin) { this.x = margin; this.vx = 0; }
-        if (this.x > canvasWidth - margin) { this.x = canvasWidth - margin; this.vx = 0; }
-        if (this.y < margin) { this.y = margin; this.vy = 0; }
-        if (this.y > canvasHeight - margin) { this.y = canvasHeight - margin; this.vy = 0; }
-    }
-
-    getChargeDuration() {
-        switch (this.behaviorType) {
-            case 'heavy_unblockable': return 1200; // Heavy, long telegraph
-            case 'agile_lunge': return 650;      // Fast telegraph
-            case 'apex_boss': return 500;        // Extremely rapid reflex
-            case 'teleporter': return 700;
-            case 'balanced':
-            default:
-                return 800;
-        }
-    }
-
-    getAttackDuration() {
-        switch (this.behaviorType) {
-            case 'heavy_unblockable': return 250;
-            case 'agile_lunge': return 140;
-            case 'balanced':
-            default:
-                return 180;
-        }
-    }
-
-    getAttackSpeed() {
-        switch (this.behaviorType) {
-            case 'heavy_unblockable': return 0.55;
-            case 'agile_lunge': return 1.35; // Lunges extremely fast
-            case 'apex_boss': return 1.25;
-            case 'balanced':
-            default:
-                return 0.85;
-        }
-    }
-
-    chooseNextAction(dist, player, particleSystem, audioController) {
-        this.aiDecisionTimer = Math.random() * 800 + 400; // Reset decision clock
-
-        // 1. If too far, run closer
-        if (dist > 300) {
-            this.state = 'moving';
-            const dx = player.x - this.x;
-            const dy = player.y - this.y;
-            this.vx = (dx / dist) * this.speed;
-            this.vy = (dy / dist) * this.speed;
             return;
         }
 
-        // 2. If at good striking distance, pick attack
-        if (dist <= 250) {
-            const roll = Math.random();
-
-            if (roll < 0.55) {
-                // Trigger Attack!
-                this.state = 'charging';
-                this.stateTimer = this.getChargeDuration();
-                this.telegraphProgress = 0;
-                
-                // Define telegraph bounds
-                this.telegraphTargetX = player.x;
-                this.telegraphTargetY = player.y;
-
-                if (this.behaviorType === 'heavy_unblockable') {
-                    this.telegraphType = 'circle';
-                    this.telegraphRange = 90; // Large slam radius
-                } else if (this.behaviorType === 'agile_lunge') {
-                    this.telegraphType = 'line';
-                    this.telegraphWidth = 24;
-                    this.telegraphRange = 320; // Long spear line
-                } else {
-                    this.telegraphType = 'line';
-                    this.telegraphWidth = 35;
-                    this.telegraphRange = 160;
-                }
-                
+        // Apply friction & ragdoll constraints
+        if (this.isBoss && this.ragdollNodes) {
+            // Transfer launch velocities to torso node
+            const torso = this.ragdollNodes[0];
+            if (this.vx !== 0 || this.vy !== 0) {
+                torso.vx = this.vx;
+                torso.vy = this.vy;
                 this.vx = 0;
                 this.vy = 0;
-                
-            } else if (roll < 0.75 && this.behaviorType === 'teleporter') {
-                // Teleport behind player!
-                const angle = Math.random() * Math.PI * 2;
-                const tx = player.x + Math.cos(angle) * 120;
-                const ty = player.y + Math.sin(angle) * 120;
-                
-                particleSystem.spawnShockwave(this.x, this.y, this.color, 40);
-                this.x = tx;
-                this.y = ty;
-                particleSystem.spawnShockwave(this.x, this.y, this.color, 40);
-                audioController.playDodge();
-                
-                // Face player instantly
-                this.angle = Math.atan2(player.y - this.y, player.x - this.x);
-                this.state = 'idle';
-                
+            }
+
+            // Move each node
+            this.ragdollNodes.forEach(node => {
+                node.x += node.vx * deltaTime;
+                node.y += node.vy * deltaTime;
+                node.vx *= Math.pow(this.friction, deltaTime / 16);
+                node.vy *= Math.pow(this.friction, deltaTime / 16);
+            });
+
+            // Solve distance constraints
+            // Solve distance constraints
+            for (let iter = 0; iter < 4; iter++) {
+                this.ragdollConstraints.forEach(([idxA, idxB, restLength]) => {
+                    const nodeA = this.ragdollNodes[idxA];
+                    const nodeB = this.ragdollNodes[idxB];
+                    
+                    const dx = nodeB.x - nodeA.x;
+                    const dy = nodeB.y - nodeA.y;
+                    const dist = Math.hypot(dx, dy) || 0.001;
+                    const diff = restLength - dist;
+                    const percent = (diff / dist) * 0.5;
+                    
+                    const totalMass = nodeA.mass + nodeB.mass;
+                    const pullA = (nodeB.mass / totalMass) * percent;
+                    const pullB = (nodeA.mass / totalMass) * percent;
+                    
+                    nodeA.x -= dx * pullA;
+                    nodeA.y -= dy * pullA;
+                    nodeB.x += dx * pullB;
+                    nodeB.y += dy * pullB;
+
+                    const impulseX = dx * percent * 0.05;
+                    const impulseY = dy * percent * 0.05;
+                    nodeA.vx -= impulseX * (nodeB.mass / totalMass);
+                    nodeA.vy -= impulseY * (nodeB.mass / totalMass);
+                    nodeB.vx += impulseX * (nodeA.mass / totalMass);
+                    nodeB.vy += impulseY * (nodeA.mass / totalMass);
+                });
+            }
+
+            // Boundary checks
+            this.ragdollNodes.forEach(node => {
+                let bounced = false;
+                if (node.x < node.radius) {
+                    node.x = node.radius;
+                    node.vx = -node.vx * 0.5;
+                    bounced = true;
+                } else if (node.x > width - node.radius) {
+                    node.x = width - node.radius;
+                    node.vx = -node.vx * 0.5;
+                    bounced = true;
+                }
+                if (node.y < node.radius) {
+                    node.y = node.radius;
+                    node.vy = -node.vy * 0.5;
+                    bounced = true;
+                } else if (node.y > height - node.radius) {
+                    node.y = height - node.radius;
+                    node.vy = -node.vy * 0.5;
+                    bounced = true;
+                }
+                if (bounced && Math.hypot(node.vx, node.vy) > 0.05 && audioController) {
+                    audioController.playClick();
+                }
+            });
+
+            // Sync main object variables
+            this.x = torso.x;
+            this.y = torso.y;
+            this.vx = torso.vx;
+            this.vy = torso.vy;
+
+            // Spawn foot-jet thrust flame sparks
+            const leftFoot = this.ragdollNodes[4];
+            const rightFoot = this.ragdollNodes[5];
+            const speed = Math.hypot(torso.vx, torso.vy);
+            if (speed > 0.08) {
+                if (Math.random() < 0.25) {
+                    particleSystem.spawnClashSparks(leftFoot.x, leftFoot.y, '#ff4400');
+                    particleSystem.spawnClashSparks(rightFoot.x, rightFoot.y, '#ff4400');
+                }
+            }
+        } else {
+            // Standard enemy physics
+            this.x += this.vx * deltaTime;
+            this.y += this.vy * deltaTime;
+            this.vx *= Math.pow(this.friction, deltaTime / 16);
+            this.vy *= Math.pow(this.friction, deltaTime / 16);
+            
+            let bounced = false;
+            if (this.x < this.radius) {
+                this.x = this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            } else if (this.x > width - this.radius) {
+                this.x = width - this.radius;
+                this.vx = -this.vx * 0.6;
+                bounced = true;
+            }
+            
+            if (this.y < this.radius) {
+                this.y = this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            } else if (this.y > height - this.radius) {
+                this.y = height - this.radius;
+                this.vy = -this.vy * 0.6;
+                bounced = true;
+            }
+            
+            if (bounced && Math.hypot(this.vx, this.vy) > 0.03 && audioController) {
+                audioController.playClick();
+            }
+            
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.05) {
+                this.angle = Math.atan2(this.vy, this.vx);
+            }
+        }
+
+        // --- SINGLE PLAYER AI CONTROLLER ---
+        if (!this.game.isMultiplayer) {
+            this.updateAI(deltaTime, player, particleSystem, width, height);
+        }
+
+        // Maintain trail history for standard enemy
+        if (!this.isBoss) {
+            if (this.state !== 'dead') {
+                const speed = Math.hypot(this.vx, this.vy);
+                if (speed > 0.04) {
+                    this.trailHistory.push({ x: this.x, y: this.y, angle: this.angle });
+                    if (this.trailHistory.length > 4) {
+                        this.trailHistory.shift();
+                    }
+                } else {
+                    if (this.trailHistory.length > 0) {
+                        this.trailHistory.shift();
+                    }
+                }
             } else {
-                // Reposition (strafe sideways)
-                this.state = 'moving';
-                const angleOffset = Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2;
-                const strafeAngle = this.angle + angleOffset;
+                this.trailHistory = [];
+            }
+        }
+    }
+
+    updateAI(deltaTime, player, particleSystem, width, height) {
+        // AI charging zone is at the top (y < 150)
+        const inChargingZone = this.y < 150;
+        const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
+
+        // 1. Charge energy in zone
+        if (inChargingZone && isMovingSlowly && this.energy < 3) {
+            const chargeSpeedMultiplier = this.isBoss ? 2.0 : 1.0;
+            this.chargeTimer += deltaTime * chargeSpeedMultiplier;
+            if (Math.random() < 0.1) {
+                particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
+            }
+            if (this.chargeTimer >= 1500) {
+                this.energy++;
+                this.chargeTimer = 0;
+                this.game.audioSynth.playUpgrade();
+                particleSystem.spawnShockwave(this.x, this.y, '#ffffff', 30);
+            }
+        } else {
+            this.chargeTimer = 0;
+        }
+
+        // Melee punch logic for boss
+        if (this.isBoss && this.ragdollNodes) {
+            const distToPlayer = Math.hypot(player.x - this.x, player.y - this.y);
+            if (distToPlayer < 200) {
+                const leftHand = this.ragdollNodes[2];
+                const rightHand = this.ragdollNodes[3];
+                const angleToPlayer = Math.atan2(player.y - this.y, player.x - this.x);
                 
-                this.vx = Math.cos(strafeAngle) * this.speed * 0.8;
-                this.vy = Math.sin(strafeAngle) * this.speed * 0.8;
+                // Pull hands towards player to punch!
+                leftHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
+                leftHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
+                rightHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
+                rightHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
+
+                if (Math.random() < 0.04) {
+                    particleSystem.spawnClashSparks(leftHand.x, leftHand.y, '#ff0055');
+                    particleSystem.spawnClashSparks(rightHand.x, rightHand.y, '#ff0055');
+                }
+            }
+        }
+
+        // AI decision logic
+        this.aiTimer -= deltaTime;
+        if (this.aiTimer <= 0) {
+            const decisionTimeMultiplier = this.isBoss ? 0.5 : 1.0;
+            this.aiTimer = (Math.random() * 1000 + 800) * decisionTimeMultiplier; // reset decision timer
+
+            // Check if we need to recharge
+            if (this.energy === 0 && !inChargingZone) {
+                // Head back to charge zone
+                const targetX = width / 2 + (Math.random() - 0.5) * 60;
+                const targetY = 100;
+                const angle = Math.atan2(targetY - this.y, targetX - this.x);
+                this.vx = Math.cos(angle) * 0.45;
+                this.vy = Math.sin(angle) * 0.45;
+                this.game.audioSynth.playSlash('katana');
+            } else if (this.energy > 0 && Math.random() < 0.6) {
+                // Shoot a projectile
+                this.energy--;
+                this.game.audioSynth.playShoot();
+                
+                if (this.isBoss && this.ragdollNodes) {
+                    // Fire swordwaves from BOTH hands!
+                    const leftHand = this.ragdollNodes[2];
+                    const rightHand = this.ragdollNodes[3];
+                    const speed = 0.50; // faster lasers for boss
+                    
+                    const dxLeft = player.x - leftHand.x;
+                    this.game.spawnProjectile(leftHand.x, leftHand.y, dxLeft * 0.0015, speed, 8, 'enemy');
+                    
+                    const dxRight = player.x - rightHand.x;
+                    this.game.spawnProjectile(rightHand.x, rightHand.y, dxRight * 0.0015, speed, 8, 'enemy');
+                } else {
+                    const startX = width / 2;
+                    const startY = 90;
+                    const dx = player.x - startX;
+                    const speed = 0.45;
+                    this.game.spawnProjectile(startX, startY, dx * 0.0015, speed, 8, 'enemy');
+                }
+            } else {
+                // Ram/dash towards player or player tower
+                const targetX = Math.random() < 0.65 ? player.x : (width / 2 + (Math.random() - 0.5) * 100);
+                const targetY = height - 90;
+                const angle = Math.atan2(targetY - this.y, targetX - this.x);
+                
+                const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;
+                const launchForce = (0.5 + Math.random() * 0.25) * launchForceMultiplier;
+                this.vx = Math.cos(angle) * launchForce;
+                this.vy = Math.sin(angle) * launchForce;
+                this.game.audioSynth.playSlash('katana');
             }
         }
     }
 
     draw(ctx, canvasController) {
+        if (this.state === 'dead') return;
+
         ctx.save();
 
-        // 1. Draw glowing telegraph ranges if charging
-        if (this.state === 'charging') {
-            this.drawTelegraph(ctx, canvasController);
-        }
+        // Standard or Boss Mecha Shogun Enemy rendering
+        const renderRadius = this.isBoss ? this.radius * 1.25 : this.radius;
+        const enemyColor = this.color || '#ff0077';
 
-        // 2. Draw Enemy Body with Glow
-        canvasController.setNeonGlow(this.color, 20);
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 3;
-        ctx.fillStyle = '#140a0a';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // 3. Draw direction pointer
-        canvasController.resetNeonGlow();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(this.x, this.y);
-        ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 5), this.y + Math.sin(this.angle) * (this.radius + 5));
-        ctx.stroke();
-
-        // 4. Draw weapon graphic depending on style
-        this.drawWeaponGraphic(ctx, canvasController);
-
-        // 5. Draw dizzy stars if stunned
-        if (this.state === 'stunned') {
-            const numStars = 3;
-            const time = performance.now() * 0.005;
-            canvasController.setNeonGlow('#ffff00', 8);
-            ctx.fillStyle = '#ffff00';
-            for (let i = 0; i < numStars; i++) {
-                const angle = time + (i * Math.PI * 2 / numStars);
-                const sx = this.x + Math.cos(angle) * 16;
-                const sy = this.y - this.radius - 12 + Math.sin(angle) * 4;
-                ctx.fillRect(sx - 2, sy - 2, 4, 4);
-            }
-        }
-
-        ctx.restore();
-    }
-
-    drawTelegraph(ctx, canvasController) {
-        ctx.save();
-        
-        // Define flashing color: Red changing to solid White during perfect parry window
-        const isParryWindow = this.parryFlashTimer > 0;
-        const color = isParryWindow ? '#ffffff' : this.color;
-        
-        ctx.globalAlpha = 0.2 + this.telegraphProgress * 0.35;
-        if (isParryWindow) {
-            ctx.globalAlpha = 0.8;
-            canvasController.setNeonGlow('#ffffff', 20);
-        } else {
-            canvasController.setNeonGlow(this.color, 8);
-        }
-
-        if (this.telegraphType === 'line') {
-            const angle = Math.atan2(this.telegraphTargetY - this.y, this.telegraphTargetX - this.x);
-            const ex = this.x + Math.cos(angle) * this.telegraphRange;
-            const ey = this.y + Math.sin(angle) * this.telegraphRange;
-            
-            // Draw line boundary
-            ctx.strokeStyle = color;
-            ctx.lineWidth = this.telegraphWidth;
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.moveTo(this.x, this.y);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-            
-            // Draw an overlay inner narrow solid line for emphasis
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(this.x, this.y);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-
-        } else if (this.telegraphType === 'circle') {
-            // Area Slam (unblockable warning)
-            ctx.fillStyle = isParryWindow ? 'rgba(255, 255, 255, 0.4)' : 'rgba(255, 153, 0, 0.2)';
-            ctx.strokeStyle = isParryWindow ? '#ffffff' : '#ff9900';
-            ctx.lineWidth = 2;
-            
-            // Draw expanding indicator circle
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.telegraphRange * this.telegraphProgress, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            
-            // Draw maximum limit outer bounds
-            ctx.setLineDash([4, 4]);
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.telegraphRange, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-        }
-
-        ctx.restore();
-    }
-
-    drawWeaponGraphic(ctx, canvasController) {
-        ctx.save();
-        canvasController.setNeonGlow(this.color, 12);
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 3.5;
-        
-        if (this.behaviorType === 'agile_lunge') {
-            // Draw a heavy futuristic energy pole-arm/spear
-            ctx.beginPath();
-            ctx.moveTo(this.x, this.y);
-            ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 24), this.y + Math.sin(this.angle) * (this.radius + 24));
-            ctx.stroke();
-            
-            // Draw spear point
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            const px = this.x + Math.cos(this.angle) * (this.radius + 24);
-            const py = this.y + Math.sin(this.angle) * (this.radius + 24);
-            ctx.arc(px, py, 4, 0, Math.PI * 2);
-            ctx.fill();
-
-        } else if (this.behaviorType === 'heavy_unblockable') {
-            // Draw giant purple battle mace
-            const shaftAngle = this.angle + Math.PI * 0.95;
-            const shaftLength = this.radius + 18;
-            const headX = this.x + Math.cos(shaftAngle) * shaftLength;
-            const headY = this.y + Math.sin(shaftAngle) * shaftLength;
-            
-            // Shaft
-            ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
-            ctx.moveTo(this.x, this.y);
-            ctx.lineTo(headX, headY);
-            ctx.stroke();
-            
-            // Spiked mace head
-            ctx.strokeStyle = this.color;
-            ctx.fillStyle = '#140024';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(headX, headY, 10, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-
-        } else {
-            // Standard red cyber katana
-            const katanaAngle = this.angle + Math.PI * 0.85;
-            ctx.beginPath();
-            ctx.moveTo(this.x + Math.cos(katanaAngle) * 5, this.y + Math.sin(katanaAngle) * 5);
-            ctx.lineTo(this.x + Math.cos(katanaAngle) * (this.radius + 18), this.y + Math.sin(katanaAngle) * (this.radius + 18));
-            ctx.stroke();
-        }
+        canvasController.drawSamuraiCharacter(
+            ctx, 
+            this.x, 
+            this.y, 
+            renderRadius, 
+            enemyColor, 
+            this.angle, 
+            'blades', 
+            false, 
+            0, 
+            0, 
+            this.hp / this.maxHp,
+            this.trailHistory,
+            (this.y < 150)
+        );
 
         ctx.restore();
     }

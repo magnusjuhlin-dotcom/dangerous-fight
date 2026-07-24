@@ -19,22 +19,29 @@ class Game {
         this.uiCtrl = new UIController();
         this.particles = new ParticleSystem();
         
-        // Setup player
-        this.player = new Player(this.canvasCtrl.width / 2, this.canvasCtrl.height * 0.7);
-        this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
-        this.player.activeWeaponKey = this.upgradeMgr.state.equippedWeapon;
+        // Symmetrical Towers setup
+        this.topTower = { hp: 500, maxHp: 500 };
+        this.bottomTower = { hp: 500, maxHp: 500 };
+
+        // Entities
+        this.player = new Player(this.canvasCtrl.width / 2, this.canvasCtrl.height - 120, this);
+        this.enemy = new Enemy(this.canvasCtrl.width / 2, 120, this);
+        this.projectiles = []; // active bouncing bullets
         
         // Gameplay session state variables
-        this.gameState = 'menu'; // 'menu', 'playing', 'rewards', 'gameover', 'victory'
-        this.currentWave = 1;
+        this.gameState = 'menu'; // 'menu', 'multiplayer_select', 'lobby', 'join', 'playing', 'gameover', 'victory'
         this.runCredits = 0;
-        this.enemy = null;
-        this.hasHitEnemyThisDash = false;
-        
-        // Timekeeping
-        this.runStartTime = 0;
-        this.runDuration = 0;
+        this.isHardBossRound = false;
+        this.bossWarningTimeout = null;
         this.lastTime = 0;
+        this.slowMoTimer = 0;
+        
+        // Multiplayer WebRTC state
+        this.isMultiplayer = false;
+        this.isClient = false;
+        this.peer = null;
+        this.conn = null;
+        this.roomId = '';
         
         this.initUIEvents();
         this.initInputEvents();
@@ -49,419 +56,1267 @@ class Game {
 
     // Bind DOM overlay menu buttons
     initUIEvents() {
-        // Main Menu
-        document.getElementById('btn-play').addEventListener('click', () => {
+        // Single Player vs AI
+        document.getElementById('btn-play-ai').addEventListener('click', () => {
             this.audioSynth.playClick();
+            this.isMultiplayer = false;
             this.startRun();
         });
         
+        // Open multiplayer select screen
+        document.getElementById('btn-play-online').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('multiplayer');
+        });
+
+        // Multiplayer back
+        document.getElementById('btn-multi-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+
+        // Host a room
+        document.getElementById('btn-create-room').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.setupMultiplayerHost();
+        });
+
+        // Cancel Host lobby
+        document.getElementById('btn-lobby-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.cleanupNetwork();
+            this.uiCtrl.showScreen('multiplayer');
+        });
+
+        // Join room menu
+        document.getElementById('btn-join-room-menu').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            document.getElementById('join-status-text').innerText = '';
+            document.getElementById('input-room-code').value = '';
+            this.uiCtrl.showScreen('join');
+        });
+
+        // Join room back
+        document.getElementById('btn-join-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.cleanupNetwork();
+            this.uiCtrl.showScreen('multiplayer');
+        });
+
+        // Connect to peer code
+        document.getElementById('btn-connect-peer').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            const code = document.getElementById('input-room-code').value.trim();
+            if (code.length === 4) {
+                this.setupMultiplayerClient(code);
+            } else {
+                document.getElementById('join-status-text').innerText = 'Ange en 4-siffrig kod!';
+            }
+        });
+
+        // Garage (Weapons) menu
         document.getElementById('btn-weapons').addEventListener('click', () => {
             this.audioSynth.playClick();
             this.uiCtrl.renderWeaponShop(this.upgradeMgr, (key) => this.handleWeaponArsenal(key), this.audioSynth);
             this.uiCtrl.showScreen('weapons');
         });
         
+        document.getElementById('btn-weapons-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+
+        // Cannons menu
+        document.getElementById('btn-cannons').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.renderCannonShop(this.upgradeMgr, (key) => this.handleCannonArsenal(key), this.audioSynth);
+            this.uiCtrl.showScreen('cannons');
+        });
+        
+        document.getElementById('btn-cannons-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+
+        // Upgrades menu
         document.getElementById('btn-upgrades').addEventListener('click', () => {
             this.audioSynth.playClick();
             this.uiCtrl.renderPersistentUpgrades(this.upgradeMgr, (key) => this.handlePersistentUpgrade(key), this.audioSynth);
             this.uiCtrl.showScreen('upgrades');
         });
         
-        // Back buttons
-        document.getElementById('btn-weapons-back').addEventListener('click', () => {
-            this.audioSynth.playClick();
-            this.uiCtrl.highestWaveVal.innerText = this.upgradeMgr.state.highestWave;
-            this.uiCtrl.showScreen('menu');
-        });
-        
         document.getElementById('btn-upgrades-back').addEventListener('click', () => {
             this.audioSynth.playClick();
-            this.uiCtrl.highestWaveVal.innerText = this.upgradeMgr.state.highestWave;
             this.uiCtrl.showScreen('menu');
         });
         
         // Game Over screen buttons
         document.getElementById('btn-restart').addEventListener('click', () => {
             this.audioSynth.playClick();
-            this.startRun();
+            if (this.isMultiplayer) {
+                this.sendNetworkPacket({ type: 'restart_request' });
+                document.getElementById('stat-defeat-winner').innerText = 'Väntar på motståndare...';
+            } else {
+                this.startRun();
+            }
         });
         
         document.getElementById('btn-gameover-menu').addEventListener('click', () => {
             this.audioSynth.playClick();
-            this.uiCtrl.highestWaveVal.innerText = this.upgradeMgr.state.highestWave;
+            this.cleanupNetwork();
             this.uiCtrl.showScreen('menu');
         });
-
+        
         // Victory screen buttons
         document.getElementById('btn-victory-restart').addEventListener('click', () => {
             this.audioSynth.playClick();
-            this.startRun();
+            if (this.isMultiplayer) {
+                this.sendNetworkPacket({ type: 'restart_request' });
+            } else {
+                this.startRun();
+            }
         });
-
+        
         document.getElementById('btn-victory-menu').addEventListener('click', () => {
             this.audioSynth.playClick();
-            this.uiCtrl.highestWaveVal.innerText = this.upgradeMgr.state.highestWave;
+            this.cleanupNetwork();
             this.uiCtrl.showScreen('menu');
         });
+
+        // Floating shoot button with responsive touchstart and click handling
+        const shootBtn = document.getElementById('shoot-btn');
+        const triggerShoot = (e) => {
+            if (e.cancelable) e.preventDefault();
+            this.player.shoot();
+        };
+        shootBtn.addEventListener('click', triggerShoot);
+        shootBtn.addEventListener('touchstart', triggerShoot, { passive: false });
     }
 
-    // Bind swipe/tap gameplay inputs
+    // Bind dragging slingshot gameplay inputs
     initInputEvents() {
-        this.inputCtrl.onSwipe = (dirX, dirY) => {
-            if (this.gameState !== 'playing') return;
-            this.player.dash(dirX, dirY, this.audioSynth, this.particles);
-            this.hasHitEnemyThisDash = false; // Reset hit flag for the new attack
+        this.inputCtrl.onDragStart = (x, y) => {
+            if (this.gameState !== 'playing') return false;
+            if (this.player.containsPoint(x, y)) {
+                return this.player.startDrag();
+            }
+            return false;
         };
         
-        this.inputCtrl.onTap = () => {
+        this.inputCtrl.onDragMove = (dx, dy) => {
             if (this.gameState !== 'playing') return;
-            this.player.parry(this.audioSynth, this.particles);
+            this.player.dragMove(dx, dy);
+        };
+
+        this.inputCtrl.onDragEnd = (dx, dy) => {
+            if (this.gameState !== 'playing') return;
+            this.player.endDrag();
+        };
+
+        // Keyboard Arrow/WASD fallback
+        this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
+            if (this.gameState !== 'playing' || this.player.state === 'dead') return;
+            this.player.vx = dirX * 0.45 * this.player.profile.speedMultiplier;
+            this.player.vy = dirY * 0.45 * this.player.profile.speedMultiplier;
+            this.audioSynth.playSlash(this.player.activeWeaponKey);
         };
     }
 
-    // Main Weapon Shop logic
+    // Vehicle equip/unlock shop logic
     handleWeaponArsenal(weaponKey) {
         const state = this.upgradeMgr.state;
         const costs = { katana: 0, blades: 100, hammer: 250 };
         const cost = costs[weaponKey];
         
         if (state.unlockedWeapons[weaponKey]) {
-            // Already unlocked, equip it
             this.upgradeMgr.equipWeapon(weaponKey);
             this.player.activeWeaponKey = weaponKey;
         } else {
-            // Try to unlock it
             if (this.upgradeMgr.buyWeapon(weaponKey, cost)) {
                 this.player.activeWeaponKey = weaponKey;
                 this.audioSynth.playUpgrade();
             }
         }
-        
         this.uiCtrl.renderWeaponShop(this.upgradeMgr, (key) => this.handleWeaponArsenal(key), this.audioSynth);
     }
 
-    // Main Persistent upgrades purchase logic
+    // Cannon equip/unlock shop logic
+    handleCannonArsenal(cannonKey) {
+        const state = this.upgradeMgr.state;
+        const costs = { laser: 0, plasma: 150, rapid: 200, trio: 300, hagel: 350, sniper: 450, bak\u00e5t: 500 };
+        const cost = costs[cannonKey] || 0;
+        
+        if (state.unlockedCannons[cannonKey]) {
+            // Toggle active state
+            this.upgradeMgr.toggleCannon(cannonKey);
+        } else {
+            if (this.upgradeMgr.buyCannon(cannonKey, cost)) {
+                this.audioSynth.playUpgrade();
+            }
+        }
+        this.uiCtrl.renderCannonShop(this.upgradeMgr, (key) => this.handleCannonArsenal(key), this.audioSynth);
+    }
+
+    // Persistent upgrades purchase logic
     handlePersistentUpgrade(upgradeKey) {
         if (this.upgradeMgr.buyUpgrade(upgradeKey)) {
-            // Re-apply permanent upgrades
             this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
             this.audioSynth.playUpgrade();
         }
         this.uiCtrl.renderPersistentUpgrades(this.upgradeMgr, (key) => this.handlePersistentUpgrade(key), this.audioSynth);
     }
 
-    // Triggered when clicking PLAY
+    // Host PeerJS Setup
+    setupMultiplayerHost() {
+        this.isMultiplayer = true;
+        this.isClient = false;
+        
+        const randomCode = Math.floor(1000 + Math.random() * 9000).toString();
+        this.roomId = randomCode;
+        document.getElementById('lobby-code-val').innerText = randomCode;
+        this.uiCtrl.showScreen('lobby');
+
+        this.peer = new Peer(`dangerousfight-${randomCode}`);
+        
+        this.peer.on('open', (id) => {
+            console.log('Room hosted with ID:', randomCode);
+        });
+
+        this.peer.on('connection', (conn) => {
+            this.conn = conn;
+            this.bindNetworkEvents();
+        });
+
+        this.peer.on('error', (err) => {
+            console.error('PeerJS error, retrying host...', err);
+            this.cleanupNetwork();
+            this.setupMultiplayerHost(); // try again with a different code
+        });
+    }
+
+    // Client PeerJS Setup
+    setupMultiplayerClient(code) {
+        this.isMultiplayer = true;
+        this.isClient = true;
+        this.roomId = code;
+        
+        const statusEl = document.getElementById('join-status-text');
+        statusEl.innerText = 'Ansluter...';
+
+        this.peer = new Peer(); // Random Client ID
+        
+        this.peer.on('open', (id) => {
+            const hostId = `dangerousfight-${code}`;
+            this.conn = this.peer.connect(hostId);
+            this.bindNetworkEvents();
+        });
+
+        this.peer.on('error', (err) => {
+            console.error('PeerJS Join error:', err);
+            statusEl.innerText = 'Kunde inte ansluta till rummet.';
+            this.cleanupNetwork();
+        });
+    }
+
+    bindNetworkEvents() {
+        this.conn.on('open', () => {
+            console.log('Network connection fully open!');
+            this.sendNetworkPacket({
+                type: 'handshake',
+                vehicle: this.player.activeWeaponKey,
+                cannon: this.upgradeMgr.state.equippedCannons || [this.upgradeMgr.state.equippedCannon || 'laser'],
+                upgrades: this.upgradeMgr.state.upgrades
+            });
+        });
+
+        this.conn.on('data', (data) => {
+            this.handleIncomingPacket(data);
+        });
+
+        this.conn.on('close', () => {
+            console.log('Network connection closed!');
+            this.cleanupNetwork();
+            if (this.gameState === 'playing') {
+                this.uiCtrl.renderGameOver(0, 'Motståndaren kopplade från');
+            }
+        });
+    }
+
+    cleanupNetwork() {
+        if (this.conn) {
+            this.conn.close();
+            this.conn = null;
+        }
+        if (this.peer) {
+            this.peer.destroy();
+            this.peer = null;
+        }
+        this.isMultiplayer = false;
+        this.isClient = false;
+    }
+
+    sendNetworkPacket(data) {
+        if (this.conn && this.conn.open) {
+            this.conn.send(data);
+        }
+    }
+
+    handleIncomingPacket(data) {
+        if (data.type === 'handshake') {
+            // Setup opponent's vehicle type
+            this.enemy.setVehicleType(data.vehicle);
+            if (data.upgrades) {
+                // Symmetrically, opponent's upgrades affect their maxHP
+                this.enemy.maxHp = this.enemy.profile.baseHp + ((data.upgrades.health || 0) * 10);
+                this.enemy.hp = this.enemy.maxHp;
+            }
+            
+            // Handshake response from client to host
+            if (!this.isClient) {
+                this.sendNetworkPacket({
+                    type: 'handshake_ack',
+                    vehicle: this.player.activeWeaponKey,
+                    cannon: this.upgradeMgr.state.equippedCannons || [this.upgradeMgr.state.equippedCannon || 'laser'],
+                    upgrades: this.upgradeMgr.state.upgrades
+                });
+                // Host kicks off run!
+                this.startRun();
+            }
+        } else if (data.type === 'handshake_ack') {
+            this.enemy.setVehicleType(data.vehicle);
+            if (data.upgrades) {
+                this.enemy.maxHp = this.enemy.profile.baseHp + ((data.upgrades.health || 0) * 10);
+                this.enemy.hp = this.enemy.maxHp;
+            }
+            // Client kicks off run!
+            this.startRun();
+        } else if (data.type === 'sync') {
+            // Sync positions (Note: Mirrored view mapping!)
+            const w = this.canvasCtrl.width;
+            const h = this.canvasCtrl.height;
+
+            // Opponent car position/speed/HP
+            this.enemy.x = w - data.player.x;
+            this.enemy.y = h - data.player.y;
+            this.enemy.vx = -data.player.vx;
+            this.enemy.vy = -data.player.vy;
+            this.enemy.hp = data.player.hp;
+            this.enemy.energy = data.player.energy;
+            
+            // Sync screen shake
+            if (data.shake) {
+                this.canvasCtrl.shake(data.shake.amt, data.shake.dur);
+            }
+            
+            // Sync spawned remote projectiles (mirrored)
+            if (data.spawnedProjectiles) {
+                data.spawnedProjectiles.forEach(p => {
+                    this.spawnProjectile(
+                        w - p.x,
+                        h - p.y,
+                        -p.vx,
+                        -p.vy,
+                        p.radius,
+                        'enemy'
+                    );
+                });
+            }
+            
+            // Symmetrically sync tower healths
+            if (this.isClient) {
+                // Host sends authoritative tower healths
+                this.bottomTower.hp = data.towers.top; // Client's bottom tower is Host's top tower
+                this.topTower.hp = data.towers.bottom; // Client's top tower is Host's bottom tower
+            } else {
+                // Host receives client car updates
+                // Symmetrically, Host tower values are authoritative. We don't overwrite them here.
+            }
+        } else if (data.type === 'projectile_fired') {
+            // Client spawned a projectile, Host replicates it
+            const w = this.canvasCtrl.width;
+            const h = this.canvasCtrl.height;
+            this.spawnProjectile(
+                w - data.x,
+                h - data.y,
+                -data.vx,
+                -data.vy,
+                data.radius,
+                'enemy',
+                data.cannonType || 'laser'
+            );
+        } else if (data.type === 'restart_request') {
+            this.startRun();
+        }
+    }
+
+    // Triggered when starting a game
     startRun() {
-        this.currentWave = 1;
         this.runCredits = 0;
-        this.runStartTime = performance.now();
         this.particles.clear();
+        this.projectiles = [];
+        this.slowMoTimer = 0; // reset slow motion
+        
+        let isBoss = false;
+        if (!this.isMultiplayer) {
+            // Increment match count
+            this.upgradeMgr.state.matchCount = (this.upgradeMgr.state.matchCount || 0) + 1;
+            this.upgradeMgr.save();
+            
+            // Determine if this is a hard boss match
+            if (this.upgradeMgr.state.matchCount % 2 === 0) {
+                isBoss = true;
+            }
+        }
+        this.isHardBossRound = isBoss;
+        
+        // Reset towers (incorporate upgrades)
+        const towerUpgLvl = this.upgradeMgr.state.upgrades.health || 0;
+        const towerMaxHp = 500 + towerUpgLvl * 50;
+        const bossTowerMaxHp = isBoss ? Math.floor(towerMaxHp * 1.5) : towerMaxHp;
+        this.topTower = { hp: bossTowerMaxHp, maxHp: bossTowerMaxHp };
+        this.bottomTower = { hp: towerMaxHp, maxHp: towerMaxHp };
         
         this.player.resetForRun();
         this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
-        this.player.activeWeaponKey = this.upgradeMgr.state.equippedWeapon;
         
-        this.startWave();
+        // Settle active weapon on player
+        this.player.activeWeaponKey = this.upgradeMgr.state.equippedWeapon || 'katana';
+        
+        // Reset enemy car
+        this.enemy.resetForRun(isBoss);
+        
+        // Offer cybernetic perks in single-player before entering battle
+        if (!this.isMultiplayer) {
+            const randomPerks = this.upgradeMgr.getRandomPerks();
+            this.uiCtrl.showScreen('perks');
+            this.uiCtrl.renderPerkSelection(randomPerks, (perkKey) => {
+                this.player.activePerk = perkKey;
+                if (perkKey === 'shieldCharge') {
+                    this.player.shieldHp = 1;
+                    this.player.shieldCooldown = 0;
+                }
+                
+                // Complete game start after perk choice
+                this.gameState = 'playing';
+                this.uiCtrl.showScreen('hud');
+                
+                // Manage HUD boss warning banner overlay
+                this.showBossWarningBanner(isBoss);
+                
+                // Play epic bass voice intro and start background music!
+                this.audioSynth.playVoiceIntro(isBoss);
+                this.audioSynth.startMusic();
+            }, this.audioSynth);
+        } else {
+            // Multiplayer starts instantly (symmetrical gameplay without active perks)
+            this.gameState = 'playing';
+            this.uiCtrl.showScreen('hud');
+            this.audioSynth.playVoiceIntro(false);
+            this.audioSynth.startMusic();
+        }
     }
 
-    // Setup a brand new wave opponent duelist
-    startWave() {
-        this.particles.clear();
-        this.player.x = this.canvasCtrl.width / 2;
-        this.player.y = this.canvasCtrl.height * 0.72;
-        this.player.vx = 0;
-        this.player.vy = 0;
-        this.player.state = 'idle';
-        this.player.stateTimer = 0;
-        
-        // Fully restore player balance posture at start of wave
-        this.player.posture = 0;
+    showBossWarningBanner(isBoss) {
+        const warningBanner = document.getElementById('boss-warning');
+        if (warningBanner) {
+            if (isBoss) {
+                warningBanner.innerText = "VARNING: SHOGUN DETEKTERAD! 💀";
+                warningBanner.classList.remove('hidden');
+                if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
+                this.bossWarningTimeout = setTimeout(() => {
+                    warningBanner.classList.add('hidden');
+                }, 3000);
+            } else {
+                warningBanner.classList.add('hidden');
+                if (this.bossWarningTimeout) {
+                    clearTimeout(this.bossWarningTimeout);
+                    this.bossWarningTimeout = null;
+                }
+            }
+        }
+    }
 
-        // Reset energy shield if player unlocked it
-        if (this.player.perks.shieldCharge) {
-            this.player.perks.hasShield = true;
+    // Projectile Spawner
+    spawnProjectile(x, y, vx, vy, radius, owner, type = 'laser') {
+        let damageCar = 25;
+        let damageTower = 50;
+        let color = '#00f0ff'; // cyan for player
+        if (owner === 'enemy') {
+            color = '#ff0077'; // pink/red for enemy
+            damageCar = 25;
+            damageTower = 50;
+            if (type === 'plasma') {
+                damageCar = 50;
+                damageTower = 110;
+                color = '#ff00ff';
+            } else if (type === 'rapid') {
+                damageCar = 15;
+                damageTower = 30;
+                color = '#39ff14'; // neon green
+            } else if (type === 'trio') {
+                damageCar = 15;
+                damageTower = 30;
+                color = '#ffff00';
+            } else if (type === 'hagel') {
+                damageCar = 10;
+                damageTower = 20;
+                color = '#aaffff'; // light cyan
+            } else if (type === 'sniper') {
+                damageCar = 80;
+                damageTower = 160;
+                color = '#ffffff'; // white hot
+            } else if (type === 'bakåt') {
+                damageCar = 20;
+                damageTower = 40;
+                color = '#00ffaa'; // teal
+            }
+        } else {
+            // Player projectile stats based on type
+            if (type === 'plasma') {
+                damageCar = 50;
+                damageTower = 110;
+                color = '#ff00ff'; // purple/magenta
+            } else if (type === 'rapid') {
+                damageCar = 15;
+                damageTower = 30;
+                color = '#39ff14'; // neon green Dubbel-Laser
+            } else if (type === 'trio') {
+                damageCar = 15;
+                damageTower = 30;
+                color = '#ffff00'; // yellow
+            } else if (type === 'hagel') {
+                damageCar = 10;
+                damageTower = 20;
+                color = '#aaffff'; // light cyan shotgun pellets
+            } else if (type === 'sniper') {
+                damageCar = 80;
+                damageTower = 160;
+                color = '#ffffff'; // white hot precision beam
+            } else if (type === 'bakåt') {
+                damageCar = 20;
+                damageTower = 40;
+                color = '#00ffaa'; // teal bidirectional
+            }
+            
+            // Sync with remote player in multiplayer
+            if (this.isMultiplayer) {
+                this.sendNetworkPacket({
+                    type: 'projectile_fired',
+                    x, y, vx, vy, radius, cannonType: type
+                });
+            }
+        }
+        
+        this.projectiles.push({
+            x, y, vx, vy, radius, owner, type, damageCar, damageTower, color
+        });
+    }
+
+    // Main Engine updates (Physics & Collisions)
+    update(dt) {
+        if (this.gameState !== 'playing') {
+            this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
+            this.particles.update(dt);
+            return;
         }
 
-        // Place enemy at top center of battlefield
-        this.enemy = new Enemy(this.canvasCtrl.width / 2, this.canvasCtrl.height * 0.22, this.currentWave);
+        // Handle slow-motion time dilation
+        let enemyDt = dt;
+        let physicsDt = dt;
+        if (this.slowMoTimer > 0) {
+            this.slowMoTimer -= dt;
+            enemyDt = dt * 0.40;
+            physicsDt = dt * 0.40;
+            // Ambient slow-mo neon pulse
+            if (Math.random() < 0.08) {
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.05)', 80);
+            }
+        }
+
+        // Update systems
+        this.canvasCtrl.update(dt, this.player);
+        this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
+        this.particles.update(dt);
         
-        this.hasHitEnemyThisDash = false;
-        this.gameState = 'playing';
-        this.uiCtrl.showScreen('hud');
+        this.player.update(dt, this.canvasCtrl.width, this.canvasCtrl.height, this.particles);
+        this.enemy.update(enemyDt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+        
+        this.updatePhysics(physicsDt);
+        this.checkCollisions(physicsDt);
+        
+        // Network Sync
+        if (this.isMultiplayer) {
+            const spawnedProjsThisFrame = []; // we can check if player shot
+            
+            // Build Sync packet
+            const syncData = {
+                type: 'sync',
+                player: {
+                    x: this.player.x,
+                    y: this.player.y,
+                    vx: this.player.vx,
+                    vy: this.player.vy,
+                    hp: this.player.hp,
+                    energy: this.player.energy
+                },
+                towers: {
+                    bottom: this.bottomTower.hp,
+                    top: this.topTower.hp
+                }
+            };
+            
+            this.sendNetworkPacket(syncData);
+        }
     }
 
-    // Core Animation Frame RAF Loop
+    updatePhysics(dt) {
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+
+        // --- 1. LAVA COLLISION DETECTION ---
+        // Lava center Y: h/2. Width: w - 160. X-range: 80 to w - 80. Height/Thick: 50.
+        const lavaMinX = 80;
+        const lavaMaxX = w - 80;
+        const lavaMinY = h / 2 - 25;
+        const lavaMaxY = h / 2 + 25;
+        const lavaDamagePerMs = 0.025; // 25 HP per second
+
+        // Check player car in lava
+        if (this.player.x > lavaMinX && this.player.x < lavaMaxX && this.player.y > lavaMinY && this.player.y < lavaMaxY && this.player.state !== 'dead') {
+            this.player.hp = Math.max(0, this.player.hp - lavaDamagePerMs * dt);
+            
+            // Slow down
+            this.player.vx *= 0.85;
+            this.player.vy *= 0.85;
+            
+            // Push player back towards bottom
+            this.player.vy += 0.015 * dt;
+            
+            if (Math.random() < 0.15) {
+                this.particles.spawnClashSparks(this.player.x, this.player.y, '#ff9900');
+            }
+            if (this.player.hp <= 0) {
+                this.player.takeDamage(1, this.player.x, this.player.y, this.particles, this.canvasCtrl);
+            }
+        }
+
+        // Check enemy car in lava
+        if (this.enemy.x > lavaMinX && this.enemy.x < lavaMaxX && this.enemy.y > lavaMinY && this.enemy.y < lavaMaxY && this.enemy.state !== 'dead') {
+            this.enemy.hp = Math.max(0, this.enemy.hp - lavaDamagePerMs * dt);
+            
+            // Slow down
+            this.enemy.vx *= 0.85;
+            this.enemy.vy *= 0.85;
+            
+            // Push enemy back towards top
+            this.enemy.vy -= 0.015 * dt;
+            
+            if (Math.random() < 0.15) {
+                this.particles.spawnClashSparks(this.enemy.x, this.enemy.y, '#ff9900');
+            }
+            if (this.enemy.hp <= 0) {
+                this.enemy.takeDamage(1, this.enemy.x, this.enemy.y, this.particles, this.canvasCtrl);
+            }
+        }
+
+        // --- 2. ONE-WAY PASSAGE GATES ---
+        // Left Passage (x < 80): ONLY UPWARDS movement allowed.
+        // Symmetrically, if moving downwards (vy > 0), block at y = h/2.
+        const blockCheck = (obj) => {
+            if (obj.x < 80) {
+                // Left side: going down is blocked
+                if (obj.vy > 0 && obj.y - obj.radius < h / 2 + 10 && obj.y + obj.radius > h / 2 - 10) {
+                    obj.y = h / 2 - obj.radius - 2;
+                    obj.vy = -obj.vy * 0.4; // slight bounce back
+                }
+            } else if (obj.x > w - 80) {
+                // Right side: going up is blocked
+                if (obj.vy < 0 && obj.y - obj.radius < h / 2 + 10 && obj.y + obj.radius > h / 2 - 10) {
+                    obj.y = h / 2 + obj.radius + 2;
+                    obj.vy = -obj.vy * 0.4;
+                }
+            }
+        };
+
+        if (this.player.state !== 'dead') blockCheck(this.player);
+        if (this.enemy.state !== 'dead') blockCheck(this.enemy);
+
+        // --- 3. PROJECTILES PHYSICS ---
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+            const p = this.projectiles[i];
+            
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            
+            // Wall bounce (left/right walls)
+            if (p.x < p.radius) {
+                p.x = p.radius;
+                p.vx = -p.vx * 0.95;
+                this.audioSynth.playClick();
+            } else if (p.x > w - p.radius) {
+                p.x = w - p.radius;
+                p.vx = -p.vx * 0.95;
+                this.audioSynth.playClick();
+            }
+            
+            // Top/bottom bounce (in case they pass towers through gaps)
+            if (p.y < p.radius) {
+                p.y = p.radius;
+                p.vy = -p.vy * 0.95;
+                this.audioSynth.playClick();
+            } else if (p.y > h - p.radius) {
+                p.y = h - p.radius;
+                p.vy = -p.vy * 0.95;
+                this.audioSynth.playClick();
+            }
+            
+            // One-way gate check for projectile
+            blockCheck(p);
+            
+            // Check Tower Hits
+            let hitTopTower = false;
+            let hitBottomTower = false;
+            
+            if (p.y < 85) {
+                if (this.isHardBossRound) {
+                    if (p.x >= 80 && p.x <= 160) hitTopTower = true;
+                    else if (p.x >= w - 160 && p.x <= w - 80) hitTopTower = true;
+                } else {
+                    if (p.x >= w / 2 - 80 && p.x <= w / 2 + 80) hitTopTower = true;
+                }
+            } else if (p.y > h - 85) {
+                if (p.x >= w / 2 - 80 && p.x <= w / 2 + 80) hitBottomTower = true;
+            }
+            
+            if (hitTopTower) {
+                // Damage top tower
+                this.topTower.hp = Math.max(0, this.topTower.hp - 50);
+                this.particles.spawnShockwave(p.x, p.y, '#ff0077', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#ff0077', 180);
+                this.canvasCtrl.flash('rgba(255, 0, 119, 0.25)', 200);
+                this.canvasCtrl.shake(8, 200);
+                this.audioSynth.playHit();
+                this.projectiles.splice(i, 1);
+                this.checkWinCondition();
+                continue;
+            } else if (hitBottomTower) {
+                // Damage bottom tower
+                this.bottomTower.hp = Math.max(0, this.bottomTower.hp - 50);
+                this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
+                this.canvasCtrl.addFloorPulse(p.x, p.y, '#00f0ff', 180);
+                this.canvasCtrl.flash('rgba(0, 240, 255, 0.25)', 200);
+                this.canvasCtrl.shake(8, 200);
+                this.audioSynth.playHit();
+                this.projectiles.splice(i, 1);
+                this.checkWinCondition();
+                continue;
+            }
+            
+            // Check samurai/enemy hits
+            if (this.player.state !== 'dead' && Math.hypot(p.x - this.player.x, p.y - this.player.y) < this.player.radius + p.radius) {
+                // Perfect Parry: if projectile belongs to enemy and player is launching/dashing fast
+                if (p.owner === 'enemy' && Math.hypot(this.player.vx, this.player.vy) > 0.15) {
+                    this.particles.spawnShockwave(p.x, p.y, '#ffffff', 40);
+                    this.canvasCtrl.addFloorPulse(p.x, p.y, '#ffffff', 200);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
+                    this.canvasCtrl.shake(7, 120);
+                    this.audioSynth.playParry();
+                    
+                    // Vampirism Perk Heal
+                    if (this.player.activePerk === 'vampirism') {
+                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.floor(this.player.maxHp * 0.08));
+                    }
+                    
+                    // Time Dilation slow motion perk
+                    if (this.player.activePerk === 'timeDilation') {
+                        this.slowMoTimer = 2500;
+                    }
+                    
+                    // Deflect the projectile (reverse direction and transfer ownership to player!)
+                    p.owner = 'player';
+                    p.vx = -p.vx * 1.25;
+                    p.vy = -p.vy * 1.25;
+                    p.color = '#00f0ff'; // change laser color to player cyan!
+                    
+                    continue;
+                }
+                
+                this.player.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+            if (this.enemy.state !== 'dead') {
+                let hitEnemy = false;
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                        const node = this.enemy.ragdollNodes[n];
+                        if (Math.hypot(p.x - node.x, p.y - node.y) < node.radius + p.radius) {
+                            hitEnemy = true;
+                            // Push the node slightly when hit by projectile
+                            const angle = Math.atan2(node.y - p.y, node.x - p.x);
+                            node.vx += Math.cos(angle) * 0.05;
+                            node.vy += Math.sin(angle) * 0.05;
+                            break;
+                        }
+                    }
+                } else {
+                    if (Math.hypot(p.x - this.enemy.x, p.y - this.enemy.y) < this.enemy.radius + p.radius) {
+                        hitEnemy = true;
+                    }
+                }
+
+                if (hitEnemy) {
+                    this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
+                    this.projectiles.splice(i, 1);
+                    continue;
+                }
+            }
+        }
+    }
+
+    checkCollisions(dt) {
+        if (this.player.state === 'dead' || this.enemy.state === 'dead') return;
+
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+
+        // --- 1. SAMURAI-TO-SAMURAI ELASTIC COLLISION ---
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            this.enemy.ragdollNodes.forEach(node => {
+                const dist = Math.hypot(this.player.x - node.x, this.player.y - node.y);
+                const touchDist = this.player.radius + node.radius;
+                
+                if (dist < touchDist) {
+                    const angle = Math.atan2(this.player.y - node.y, this.player.x - node.x);
+                    const overlap = touchDist - dist;
+                    
+                    this.player.x += Math.cos(angle) * overlap * 0.5;
+                    this.player.y += Math.sin(angle) * overlap * 0.5;
+                    node.x -= Math.cos(angle) * overlap * 0.5;
+                    node.y -= Math.sin(angle) * overlap * 0.5;
+
+                    const normalX = Math.cos(angle);
+                    const normalY = Math.sin(angle);
+                    
+                    const rvx = this.player.vx - node.vx;
+                    const rvy = this.player.vy - node.vy;
+                    const velAlongNormal = rvx * normalX + rvy * normalY;
+                    
+                    if (velAlongNormal < 0) {
+                        const restitution = 0.85;
+                        let impulseScalar = -(1 + restitution) * velAlongNormal;
+                        impulseScalar /= (1 / this.player.mass) + (1 / node.mass);
+                        
+                        this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                        this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                        node.vx -= (impulseScalar / node.mass) * normalX;
+                        node.vy -= (impulseScalar / node.mass) * normalY;
+                    }
+                    
+                    this.audioSynth.playClash();
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                    this.canvasCtrl.addFloorPulse((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#00f0ff', 160);
+                    this.particles.spawnClashSparks((this.player.x + node.x) / 2, (this.player.y + node.y) / 2, '#ffffff');
+                }
+            });
+        } else {
+            const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
+            const touchDist = this.player.radius + this.enemy.radius;
+            
+            if (dist < touchDist) {
+                const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
+                const overlap = touchDist - dist;
+                
+                this.player.x += Math.cos(angle) * overlap * 0.5;
+                this.player.y += Math.sin(angle) * overlap * 0.5;
+                this.enemy.x -= Math.cos(angle) * overlap * 0.5;
+                this.enemy.y -= Math.sin(angle) * overlap * 0.5;
+
+                const normalX = Math.cos(angle);
+                const normalY = Math.sin(angle);
+                
+                const rvx = this.player.vx - this.enemy.vx;
+                const rvy = this.player.vy - this.enemy.vy;
+                const velAlongNormal = rvx * normalX + rvy * normalY;
+                
+                if (velAlongNormal < 0) {
+                    const restitution = 0.85;
+                    let impulseScalar = -(1 + restitution) * velAlongNormal;
+                    impulseScalar /= (1 / this.player.mass) + (1 / this.enemy.mass);
+                    
+                    this.player.vx += (impulseScalar / this.player.mass) * normalX;
+                    this.player.vy += (impulseScalar / this.player.mass) * normalY;
+                    this.enemy.vx -= (impulseScalar / this.enemy.mass) * normalX;
+                    this.enemy.vy -= (impulseScalar / this.enemy.mass) * normalY;
+                }
+                
+                this.audioSynth.playClash();
+                this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+                this.canvasCtrl.addFloorPulse((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#00f0ff', 160);
+                this.particles.spawnClashSparks((this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, '#ffffff');
+            }
+        }
+
+        // --- 2. TOWER RAMMING COLLISION ---
+        // Player samurai hitting top tower (enemy)
+        if (this.player.y < 85) {
+            let hitTopTower = false;
+            if (this.isHardBossRound) {
+                const leftIntersect = (this.player.x + this.player.radius >= 80 && this.player.x - this.player.radius <= 160);
+                const rightIntersect = (this.player.x + this.player.radius >= w - 160 && this.player.x - this.player.radius <= w - 80);
+                if (leftIntersect || rightIntersect) {
+                    hitTopTower = true;
+                }
+            } else {
+                if (this.player.x + this.player.radius >= w / 2 - 80 && this.player.x - this.player.radius <= w / 2 + 80) {
+                    hitTopTower = true;
+                }
+            }
+
+            if (hitTopTower) {
+                const impactForce = Math.abs(this.player.vy);
+                if (impactForce > 0.05) {
+                    const ramDmg = this.player.profile.ramDamage;
+                    this.topTower.hp = Math.max(0, this.topTower.hp - ramDmg);
+                    
+                    this.player.vy = 0.28;
+                    this.player.y = 88;
+                    
+                    this.player.takeDamage(30, this.player.x, 70, this.particles, this.canvasCtrl);
+                    
+                    this.particles.spawnShockwave(this.player.x, 85, this.player.color, 80);
+                    this.canvasCtrl.addFloorPulse(this.player.x, 85, '#ff0077', 220);
+                    this.canvasCtrl.flash('rgba(255, 255, 255, 0.45)', 220); // white slam flash
+                    this.canvasCtrl.shake(14, 300);
+                    this.audioSynth.playHit();
+                    
+                    this.checkWinCondition();
+                }
+            }
+        }
+
+        // Enemy samurai hitting bottom tower (player)
+        let hitBottomTower = false;
+        let hittingNode = this.enemy;
+        
+        if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+            for (let n = 0; n < this.enemy.ragdollNodes.length; n++) {
+                const node = this.enemy.ragdollNodes[n];
+                if (node.y + node.radius > h - 85) {
+                    if (node.x + node.radius >= w / 2 - 80 && node.x - node.radius <= w / 2 + 80) {
+                        hitBottomTower = true;
+                        hittingNode = node;
+                        break;
+                    }
+                }
+            }
+        } else {
+            if (this.enemy.y + this.enemy.radius > h - 85) {
+                if (this.enemy.x + this.enemy.radius >= w / 2 - 80 && this.enemy.x - this.enemy.radius <= w / 2 + 80) {
+                    hitBottomTower = true;
+                }
+            }
+        }
+
+        if (hitBottomTower) {
+            const impactForce = Math.abs(hittingNode.vy);
+            if (impactForce > 0.05) {
+                const ramDmg = this.enemy.isBoss ? 150 : (this.enemy.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100);
+                this.bottomTower.hp = Math.max(0, this.bottomTower.hp - ramDmg);
+                
+                if (this.enemy.isBoss && this.enemy.ragdollNodes) {
+                    this.enemy.ragdollNodes.forEach(node => {
+                        node.vy = -0.28;
+                        node.y -= 10;
+                    });
+                } else {
+                    this.enemy.vy = -0.28;
+                    this.enemy.y = h - 88;
+                }
+                
+                this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
+                
+                this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
+                this.canvasCtrl.addFloorPulse(hittingNode.x, h - 85, '#00f0ff', 220);
+                this.canvasCtrl.flash('rgba(255, 0, 51, 0.45)', 250); // red warn flash
+                this.canvasCtrl.shake(14, 300);
+                this.audioSynth.playHit();
+                
+                this.checkWinCondition();
+            }
+        }
+    }
+
+    checkWinCondition() {
+        if (this.topTower.hp <= 0) {
+            // Player Wins!
+            this.handleVictory();
+        } else if (this.bottomTower.hp <= 0) {
+            // Player Loses!
+            this.handleDefeat();
+        }
+    }
+
+    handleVictory() {
+        this.gameState = 'victory';
+        
+        const isBoss = !this.isMultiplayer && this.isHardBossRound;
+        
+        // Award credits (multiplied by hacker level)
+        const creditUpgradeModifier = 1 + (this.upgradeMgr.state.upgrades.credits || 0) * 0.2; // up to +100% credits
+        const baseAward = isBoss ? 120 : 60;
+        const rewardCredits = Math.floor(baseAward * creditUpgradeModifier);
+        
+        this.upgradeMgr.addCredits(rewardCredits);
+        this.upgradeMgr.recordHighestWave(this.upgradeMgr.state.highestWave + 1);
+        
+        this.uiCtrl.renderVictory(rewardCredits, isBoss);
+        this.audioSynth.playVictory();
+    }
+
+    handleDefeat() {
+        this.gameState = 'gameover';
+        
+        // Suffer partial credit loss/award
+        const rewardCredits = 10;
+        this.upgradeMgr.addCredits(rewardCredits);
+        
+        this.uiCtrl.renderGameOver(rewardCredits, this.isMultiplayer ? 'Motståndaren' : 'Datorn');
+        this.audioSynth.playDefeat();
+    }
+
+    // Main Engine rendering calls
+    draw() {
+        // Clear screen with custom trails persistence (motion blur during play, full 1.0 clear in menus)
+        const opacityTrail = this.gameState === 'playing' ? 0.38 : 1.0;
+        this.canvasCtrl.clear(opacityTrail);
+        
+        // Apply camera screen shake translations
+        this.canvasCtrl.applyTransformations();
+        
+        // Draw one-way gate visual effects and lava barrier only when in active playing state!
+        if (this.gameState === 'playing') {
+            this.drawOneWayGates();
+            this.drawLavaBarrier();
+        }
+
+        // Draw glowing particles
+        this.particles.draw(this.canvasCtrl.ctx);
+        
+        // Draw Projectiles
+        if (this.gameState === 'playing') {
+            this.projectiles.forEach(p => {
+                this.canvasCtrl.ctx.save();
+                this.canvasCtrl.setNeonGlow('#ffffff', 10);
+                this.canvasCtrl.ctx.fillStyle = '#ffffff';
+                this.canvasCtrl.ctx.beginPath();
+                this.canvasCtrl.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                this.canvasCtrl.ctx.fill();
+                this.canvasCtrl.ctx.restore();
+            });
+        }
+
+        // Draw Entities
+        if (this.gameState === 'playing' || this.gameState === 'gameover' || this.gameState === 'victory') {
+            this.player.draw(this.canvasCtrl.ctx, this.canvasCtrl);
+            this.enemy.draw(this.canvasCtrl.ctx, this.canvasCtrl);
+            
+            // Draw static glowing Towers
+            this.drawTowers();
+        }
+        
+        // Restore matrix
+        this.canvasCtrl.restoreTransformations();
+        
+        // UI Hud updates
+        if (this.gameState === 'playing') {
+            this.uiCtrl.updateHUD(this.player, this.enemy, this.isMultiplayer, this.isClient);
+        }
+    }
+
+    drawLavaBarrier() {
+        const ctx = this.canvasCtrl.ctx;
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        
+        ctx.save();
+        this.canvasCtrl.setNeonGlow(this.gameState === 'playing' ? 'var(--neon-orange)' : 'rgba(255,153,0,0.25)', 25);
+        ctx.fillStyle = 'rgba(255, 90, 0, 0.9)';
+        ctx.strokeStyle = '#ff9900';
+        ctx.lineWidth = 3;
+        
+        // Lava rectangle centered
+        // x: 80 to w - 80, height: 50. Centered on Y-axis
+        ctx.beginPath();
+        ctx.rect(80, h / 2 - 25, w - 160, 50);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw hot inner details
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(90, h / 2);
+        ctx.lineTo(w - 90, h / 2);
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+
+    drawOneWayGates() {
+        const ctx = this.canvasCtrl.ctx;
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        
+        ctx.save();
+        
+        // Visual line of gate
+        const centerY = h / 2;
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        
+        // LEFT Passage: UP-only (Green arrows pointing UP, blocks Down)
+        this.canvasCtrl.setNeonGlow('var(--neon-green)', 15);
+        ctx.strokeStyle = 'rgba(57, 255, 20, 0.45)';
+        ctx.beginPath();
+        ctx.moveTo(10, centerY);
+        ctx.lineTo(70, centerY);
+        ctx.stroke();
+        
+        // Draw directional arrows pointing UP (negative y)
+        ctx.fillStyle = 'rgba(57, 255, 20, 0.65)';
+        ctx.beginPath();
+        ctx.moveTo(40, centerY - 15);
+        ctx.lineTo(32, centerY - 6);
+        ctx.lineTo(48, centerY - 6);
+        ctx.closePath();
+        ctx.fill();
+        
+        // RIGHT Passage: DOWN-only (Red/Pink arrows pointing DOWN, blocks Up)
+        this.canvasCtrl.setNeonGlow('var(--neon-pink)', 15);
+        ctx.strokeStyle = 'rgba(255, 0, 119, 0.45)';
+        ctx.beginPath();
+        ctx.moveTo(w - 70, centerY);
+        ctx.lineTo(w - 10, centerY);
+        ctx.stroke();
+        
+        // Draw directional arrows pointing DOWN (positive y)
+        ctx.fillStyle = 'rgba(255, 0, 119, 0.65)';
+        ctx.beginPath();
+        ctx.moveTo(w - 40, centerY + 15);
+        ctx.lineTo(w - 48, centerY + 6);
+        ctx.lineTo(w - 32, centerY + 6);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.restore();
+    }
+
+    drawTowers() {
+        const ctx = this.canvasCtrl.ctx;
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+
+        ctx.save();
+        
+        // Draw Top Tower (Red neon)
+        const glowColor = this.isHardBossRound ? 'crimson' : 'var(--neon-pink)';
+        this.canvasCtrl.setNeonGlow(glowColor, 20);
+        ctx.fillStyle = '#0f0508';
+        ctx.strokeStyle = glowColor;
+        ctx.lineWidth = 4;
+        
+        if (this.isHardBossRound) {
+            // Left Top Tower: x from 80 to 160 (width 80)
+            ctx.beginPath();
+            ctx.rect(80, 0, 80, 80);
+            ctx.fill();
+            ctx.stroke();
+
+            // Striped background for Left loading pad
+            ctx.save();
+            ctx.strokeStyle = 'rgba(220, 20, 60, 0.25)'; // Crimson transparent
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (let x = 85; x < 155; x += 15) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x + 10, 80);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            // Right Top Tower: x from w - 160 to w - 80 (width 80)
+            ctx.beginPath();
+            ctx.rect(w - 160, 0, 80, 80);
+            ctx.fill();
+            ctx.stroke();
+
+            // Striped background for Right loading pad
+            ctx.save();
+            ctx.strokeStyle = 'rgba(220, 20, 60, 0.25)'; // Crimson transparent
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (let x = w - 155; x < w - 85; x += 15) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x + 10, 80);
+            }
+            ctx.stroke();
+            ctx.restore();
+        } else {
+            // Top block (h = 80, spanning centered w-160)
+            ctx.beginPath();
+            ctx.rect(w / 2 - 80, 0, 160, 80);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Top loading pad (striped)
+            ctx.strokeStyle = 'rgba(255, 0, 119, 0.25)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (let x = w / 2 - 70; x < w / 2 + 70; x += 15) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x + 10, 80);
+            }
+            ctx.stroke();
+        }
+
+        // Draw Bottom Tower (Cyan neon)
+        this.canvasCtrl.setNeonGlow('var(--neon-cyan)', 20);
+        ctx.fillStyle = '#050c0f';
+        ctx.strokeStyle = 'var(--neon-cyan)';
+        ctx.lineWidth = 4;
+        
+        // Bottom block
+        ctx.beginPath();
+        ctx.rect(w / 2 - 80, h - 80, 160, 80);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Bottom loading pad (striped "Ladda" zone)
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let x = w / 2 - 70; x < w / 2 + 70; x += 15) {
+            ctx.moveTo(x, h - 80);
+            ctx.lineTo(x + 10, h);
+        }
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    // Main Engine rendering cycle loop (RAF)
     loop(timestamp) {
         if (!this.lastTime) this.lastTime = timestamp;
         let dt = timestamp - this.lastTime;
         this.lastTime = timestamp;
         
-        // Cap deltaTime to avoid logic break during tab swaps (suspended canvas)
         if (dt > 100) dt = 100;
         
         this.update(dt);
         this.draw();
         
         requestAnimationFrame((t) => this.loop(t));
-    }
-
-    // Main Engine updates (Physics & Collisions)
-    update(dt) {
-        if (this.gameState !== 'playing') {
-            // Maintain subtle dust in background during menus
-            this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
-            this.particles.update(dt);
-            return;
-        }
-
-        // 1. Tick systems
-        this.canvasCtrl.update(dt);
-        this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
-        this.particles.update(dt);
-        this.player.update(dt, this.canvasCtrl.width, this.canvasCtrl.height, this.particles);
-        
-        if (this.enemy) {
-            this.enemy.update(dt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
-            
-            // 2. Perform Combat Collisions
-            this.checkCollisions(dt);
-        }
-    }
-
-    checkCollisions(dt) {
-        if (!this.enemy || this.enemy.state === 'dead' || this.player.state === 'dead') return;
-
-        const dist = Math.hypot(this.player.x - this.enemy.x, this.player.y - this.enemy.y);
-        
-        // --- 1. SWORD CLASH DETECTOR ---
-        // If BOTH player and enemy are in active striking states, they clash!
-        if (this.player.state === 'dashing' && this.enemy.state === 'attacking') {
-            if (dist < 42) {
-                // Abort both strikes, trigger huge spark explosion
-                const clashX = (this.player.x + this.enemy.x) / 2;
-                const clashY = (this.player.y + this.enemy.y) / 2;
-                
-                this.audioSynth.playClash();
-                this.canvasCtrl.shake(14, 300);
-                this.particles.spawnClashSparks(clashX, clashY, '#ffffff');
-                this.particles.spawnShockwave(clashX, clashY, '#ffffff', 50);
-
-                // Pushback both
-                const angle = Math.atan2(this.player.y - this.enemy.y, this.player.x - this.enemy.x);
-                
-                this.player.state = 'hit';
-                this.player.stateTimer = 250;
-                this.player.vx = Math.cos(angle) * 0.18;
-                this.player.vy = Math.sin(angle) * 0.18;
-                this.player.trailPoints = [];
-
-                this.enemy.state = 'hit';
-                this.enemy.stateTimer = 250;
-                this.enemy.vx = -Math.cos(angle) * 0.18;
-                this.enemy.vy = -Math.sin(angle) * 0.18;
-                this.enemy.trailPoints = [];
-                
-                return;
-            }
-        }
-
-        // --- 2. PLAYER DASH ATTACK DEAL DAMAGE ---
-        if (this.player.state === 'dashing' && !this.hasHitEnemyThisDash) {
-            // Check if player's glowing radius + sword extension intersects enemy
-            const reach = this.player.radius + this.enemy.radius + 15;
-            if (dist <= reach) {
-                this.hasHitEnemyThisDash = true;
-                
-                // Fetch dynamic player weapon attributes
-                const wpn = this.player.activeWeapon;
-                let finalDamage = wpn.damage;
-                let finalPostureDmg = wpn.postureDamage;
-                
-                // Perks modifiers
-                if (this.player.perks.overdrive) {
-                    finalDamage *= 1.3; // +30% damage
-                }
-                if (this.player.perks.lightningSlash) {
-                    finalPostureDmg *= 1.3; // +30% posture damage
-                    this.particles.spawnClashSparks(this.enemy.x, this.enemy.y, '#00f0ff');
-                }
-                if (this.player.perks.nanites) {
-                    finalDamage *= 1.15;
-                }
-
-                const result = this.enemy.takeDamage(
-                    finalDamage, 
-                    finalPostureDmg, 
-                    this.player.x, 
-                    this.player.y, 
-                    this.audioSynth, 
-                    this.particles, 
-                    this.canvasCtrl
-                );
-
-                if (result === 'dead') {
-                    this.handleEnemyDefeated();
-                }
-            }
-        }
-
-        // --- 3. ENEMY ATTACK HIT PLAYER DETECTOR ---
-        if (this.enemy.state === 'attacking') {
-            // Check if player overlaps the active telegraphed collision shapes
-            let hasHitPlayer = false;
-
-            if (this.enemy.telegraphType === 'line') {
-                // Calculate distance from player center to line of attack
-                const angle = this.enemy.angle;
-                const ex = this.enemy.x + Math.cos(angle) * this.enemy.telegraphRange;
-                const ey = this.enemy.y + Math.sin(angle) * this.enemy.telegraphRange;
-                
-                const d = this.distToSegment(this.player, this.enemy, { x: ex, y: ey });
-                if (d < this.player.radius + this.enemy.telegraphWidth / 2) {
-                    hasHitPlayer = true;
-                }
-            } else if (this.enemy.telegraphType === 'circle') {
-                // Circle slam AoE area check
-                if (dist <= this.enemy.telegraphRange + this.player.radius) {
-                    hasHitPlayer = true;
-                }
-            }
-
-            if (hasHitPlayer) {
-                // Instantly swap enemy back to idle so player isn't hit repeatedly in one frames sequence
-                this.enemy.state = 'idle';
-                this.enemy.stateTimer = 0;
-                this.enemy.vx = 0;
-                this.enemy.vy = 0;
-
-                // CHECK PARRY!
-                const isParryWindow = this.enemy.parryFlashTimer > 0;
-                
-                if (this.player.state === 'parrying') {
-                    // 100% PERFECT PARRY DEFLATION!
-                    this.enemy.triggerParriedStun(this.audioSynth, this.particles, this.canvasCtrl);
-                    
-                    // Recover small posture/balance
-                    this.player.posture = Math.max(0, this.player.posture - this.player.maxPosture * 0.2);
-
-                    // Cyber Vampirism perk restore HP
-                    if (this.player.perks.vampirism) {
-                        const heal = Math.floor(this.player.maxHp * 0.08);
-                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
-                        this.particles.spawnShockwave(this.player.x, this.player.y, '#00ff66', 40);
-                    }
-                } else {
-                    // Player missed timing! Gets struck by full strike
-                    const damageResult = this.player.takeDamage(
-                        this.enemy.damage,
-                        this.enemy.postureDamage,
-                        this.enemy.x,
-                        this.enemy.y,
-                        this.audioSynth,
-                        this.particles,
-                        this.canvasCtrl
-                    );
-
-                    if (damageResult === 'dead') {
-                        this.handlePlayerDefeated();
-                    }
-                }
-            }
-        }
-    }
-
-    // Helper math to calculate distance from a point to a line segment
-    distToSegment(p, v, w) {
-        const l2 = (v.x - w.x) * (v.x - w.x) + (v.y - w.y) * (v.y - w.y);
-        if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
-        let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
-        t = Math.max(0, Math.min(1, t));
-        return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
-    }
-
-    // Triggered when Boss HP hits zero
-    handleEnemyDefeated() {
-        // Collect and calculate Cyber-Credits (Boosted by hacker level upgrade)
-        const creditUpgradeModifier = 1 + (this.player.upgCreditsLvl * 0.2); // up to +100% credits
-        const baseAward = 15 + this.currentWave * 5;
-        const rewardCredits = Math.floor(baseAward * creditUpgradeModifier);
-        
-        this.runCredits += rewardCredits;
-        this.upgradeMgr.addCredits(rewardCredits);
-        this.upgradeMgr.recordHighestWave(this.currentWave);
-        
-        // Wave-10 Victory Boss End Game!
-        if (this.currentWave >= 10) {
-            this.runDuration = (performance.now() - this.runStartTime) / 1000;
-            this.gameState = 'victory';
-            this.uiCtrl.renderVictory(this.runCredits, this.runDuration);
-            this.audioSynth.playVictory();
-        } else {
-            // Open Roguelite Reward choices overlay screen
-            const randomCards = this.upgradeMgr.getRandomPerks();
-            
-            // Short delay for satisfying slow-mo visual feel before opening rewards
-            setTimeout(() => {
-                this.gameState = 'rewards';
-                this.uiCtrl.renderRewardCards(randomCards, (key) => this.selectUpgradeReward(key), this.audioSynth);
-            }, 600);
-        }
-    }
-
-    // Triggered when Player HP hits zero
-    handlePlayerDefeated() {
-        this.gameState = 'gameover';
-        this.uiCtrl.renderGameOver(this.currentWave, this.runCredits);
-        this.audioSynth.playDefeat();
-    }
-
-    // Applies selected roguelite wave upgrade card
-    selectUpgradeReward(perkKey) {
-        if (perkKey === 'vampirism') this.player.perks.vampirism = true;
-        if (perkKey === 'lightningSlash') this.player.perks.lightningSlash = true;
-        if (perkKey === 'shieldCharge') {
-            this.player.perks.shieldCharge = true;
-            this.player.perks.hasShield = true;
-        }
-        if (perkKey === 'nanites') this.player.perks.nanites = true;
-        if (perkKey === 'overdrive') this.player.perks.overdrive = true;
-
-        // Partially heal player between fights
-        const heal = Math.floor(this.player.maxHp * 0.25); // heal 25%
-        this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
-
-        // Move onto next duelist!
-        this.currentWave += 1;
-        this.startWave();
-    }
-
-    // Main Engine rendering calls
-    draw() {
-        // Clear screen with custom trails persistence (motion blur)
-        const opacityTrail = this.gameState === 'playing' ? 0.38 : 0.8;
-        this.canvasCtrl.clear(opacityTrail);
-        
-        // Apply camera screen shake translations
-        this.canvasCtrl.applyTransformations();
-        
-        // 1. Draw glowing particles
-        this.particles.draw(this.canvasCtrl.ctx);
-        
-        // 2. Draw Entities
-        if (this.gameState === 'playing' || this.gameState === 'rewards' || this.gameState === 'gameover' || this.gameState === 'victory') {
-            this.player.draw(this.canvasCtrl.ctx, this.canvasCtrl);
-            if (this.enemy && this.enemy.state !== 'dead') {
-                this.enemy.draw(this.canvasCtrl.ctx, this.canvasCtrl);
-            }
-        }
-        
-        // Restore matrix
-        this.canvasCtrl.restoreTransformations();
-        
-        // 3. UI Hud updates
-        if (this.gameState === 'playing') {
-            this.uiCtrl.updateHUD(this.player, this.enemy, this.currentWave, this.runCredits);
-        }
     }
 }
 
