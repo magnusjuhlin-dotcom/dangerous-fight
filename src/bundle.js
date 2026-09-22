@@ -594,6 +594,75 @@ class AudioSynth {
         if (this._readAloudPoll) { clearInterval(this._readAloudPoll); this._readAloudPoll = null; }
     }
 
+    // Rewrite on-screen text into something a speech engine reads like a person.
+    // The menus are all-caps and full of shorthand, which engines either shout
+    // or spell out letter by letter - that is what makes it sound synthetic.
+    humanizeForSpeech(text) {
+        const abbrev = {
+            HP: 'liv', VS: 'mot', XP: 'erfarenhet', AI: 'datorn', CPU: 'datorn',
+            OK: 'okej', NR: 'nummer', KO: 'utslagen', MVP: 'bästa spelare',
+            WASD: 'tangentbordet', RT: 'höger avtryckare', LT: 'vänster avtryckare',
+            PX: 'pixlar', SEK: 'sekunder'
+        };
+        // A Swedish engine mangles the English words in the menus, so feed it a
+        // Swedish spelling of how the word should actually sound (or the Swedish
+        // word outright when there is a good one).
+        const pronounce = {
+            dangerous: 'dejndsjörös', fight: 'fajt', slingshot: 'slingsjott',
+            cyber: 'sajber', credits: 'kredits', credit: 'kredit', online: 'onlajn',
+            boss: 'båss', kills: 'besegrade', slash: 'släsch', shogun: 'sjågun',
+            armored: 'armerad', samurai: 'samuraj', perk: 'pörk', hack: 'hack',
+            dash: 'däsch', dasha: 'däscha', dashar: 'däschar', dashen: 'däschen',
+            xbox: 'eksboks', respawnar: 'återuppstår', respawn: 'återuppstånd',
+            highscore: 'hajskor', score: 'skorr', level: 'nivå', power: 'pauer'
+        };
+        let s = (text || '');
+        // 1 200 -> 1200, so it is read as one number instead of "one. two hundred"
+        s = s.replace(/(\d)[\s ](\d{3})\b/g, '$1$2');
+        // "1 2 3 4" (a room code) must not be dictated character by character
+        s = s.replace(/\b(?:\d\s+){2,}\d\b/g, (m) => m.replace(/\s+/g, ''));
+        // say the loan words the way they are meant to sound
+        s = s.replace(/[A-Za-z\u00c5\u00c4\u00d6\u00e5\u00e4\u00f6]+/g, (w) => {
+            const hit = pronounce[w.toLowerCase()];
+            return hit === undefined ? w : hit;
+        });
+        // ALL-CAPS words -> ordinary words. Lower case, not Title Case: a
+        // capitalised word makes the engine read it as a name, one word at a time.
+        s = s.replace(/\b[A-ZÅÄÖ][A-ZÅÄÖ]+\b/g, (w) => abbrev[w] || w.toLowerCase());
+        // symbols the engine would skip or spell out
+        s = s.replace(/(\d)\s*%/g, '$1 procent');
+        s = s.replace(/(\d+)\s*\/\s*(\d+)/g, '$1 av $2');
+        s = s.replace(/(\d)\s*[x×]\s*(?=[^ ])/gi, '$1 gånger ');
+        // "X / RT" is a choice, not the word "slash"
+        s = s.replace(/\s\/\s/g, ' eller ');
+        // a lone dash is a pause, not a word
+        s = s.replace(/\s[-–—]\s/g, ', ');
+        s = s.replace(/\s+([.,!?:])/g, '$1');
+        s = s.replace(/\s+/g, ' ').trim();
+
+        // Menu labels are single words. Read one per sentence and it turns into
+        // dictation, so chain the short ones into a flowing list and keep full
+        // stops for the parts that really are sentences.
+        const out = [];
+        s.split(/(?<=[.!?:])\s+/).forEach((frag) => {
+            const piece = frag.replace(/[.,]+$/, '').trim();
+            if (!piece) return;
+            const last = out.length ? out[out.length - 1] : null;
+            if (last !== null && !/[!?]$/.test(last) && piece.length < 30 && last.length < 150 && !/[!?]$/.test(piece)) {
+                // after a colon the next part is the value, so no comma in between
+                out[out.length - 1] = last + (/:$/.test(last) ? ' ' : ', ') + piece;
+            } else {
+                out.push(piece);
+            }
+        });
+        return out
+            .map((sent) => {
+                const t = sent.charAt(0).toUpperCase() + sent.slice(1);
+                return /[.!?]$/.test(t) ? t : t + '.';
+            })
+            .join(' ');
+    }
+
     // Speak `text` in Swedish; onEnd fires when done or stopped
     readAloud(text, onEnd = null) {
         this.stopReadAloud();
@@ -608,14 +677,14 @@ class AudioSynth {
             if (onEnd) onEnd();
         };
 
+        const spoken = this.humanizeForSpeech(clean);
+
         if (window.AndroidTTS && window.AndroidTTS.speakText) {
             try {
-                // Deep bass narrator voice, like the intro
-                // A real male voice at a natural-but-deep pitch sounds human;
-                // extreme pitch shifting just sounds robotic
-                // The native side picks a real (neural, male) voice and nudges the
-                // pitch back up when it is a neural one - see MainActivity.applyVoice
-                window.AndroidTTS.speakText(clean, 'sv-SE', 0.42, 0.92);
+                // The depth comes from the voice we pick (a real male neural one),
+                // not from stretching it: below ~0.8 the formants smear and it
+                // turns into a robot. The native side also clamps this.
+                window.AndroidTTS.speakText(spoken, 'sv-SE', 0.82, 0.98);
             } catch (e) {
                 if (onEnd) onEnd();
                 return false;
@@ -647,10 +716,10 @@ class AudioSynth {
         }
 
         if ('speechSynthesis' in window) {
-            const utterance = new SpeechSynthesisUtterance(clean);
+            const utterance = new SpeechSynthesisUtterance(spoken);
             utterance.lang = 'sv-SE';
-            utterance.pitch = 0.45; // dark bass narrator
-            utterance.rate = 0.9;
+            utterance.pitch = 0.85; // deep but still a human timbre
+            utterance.rate = 0.98;
             const voices = window.speechSynthesis.getVoices().filter(v => v.lang && v.lang.toLowerCase().startsWith('sv'));
             // Prefer a male Swedish voice when the platform offers one
             const male = voices.find(v => /male|man\b|oskar|erik|magnus|per\b|mattias|sven|bengt|klaus/i.test(v.name) && !/female|kvinna/i.test(v.name));
@@ -4847,8 +4916,6 @@ class Game {
                 if (el.parentElement && el.parentElement.closest('h1, h2, h3, p, label, button, li, td, th, .stat-item')) return;
                 let t = (el.innerText || '').replace(/\s+/g, ' ').trim();
                 if (!t) return;
-                // digits in the room code are read one by one
-                if (el.classList.contains('room-code-display') && /^\d{4}$/.test(t)) t = t.split('').join(' ');
                 parts.push(t);
             });
         });

@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     forceLocalVoice = true
                     android.os.Handler(mainLooper).post {
                         applyVoice(lastLocale, lastPitch, lastRate)
-                        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), utteranceId ?: "Retry")
+                        speakNaturally(text, "Retry")
                     }
                 }
             })
@@ -148,7 +148,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             // voice listing is best effort; language + pitch still apply
         }
-        engine.setPitch(if (lastVoiceWasNeural) (pitch + 0.15f).coerceAtMost(1.0f) else pitch)
+        // Below roughly 0.8 the engine smears the formants and the voice turns
+        // synthetic, so keep the pitch in the human range: the depth has to come
+        // from picking a real male voice, not from stretching a light one down.
+        val floor = if (lastVoiceWasNeural) 0.82f else 0.74f
+        engine.setPitch(pitch.coerceIn(floor, 1.15f))
         engine.setSpeechRate(rate)
         // Speak on the media stream at full volume so the narrator carries over the game
         try {
@@ -159,6 +163,27 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     .build()
             )
         } catch (e: Exception) {
+        }
+    }
+
+    // One long utterance comes out as a flat run-on. Splitting on sentence ends
+    // and inserting a short silence gives the narrator natural phrasing.
+    private fun speakNaturally(text: String, idPrefix: String) {
+        val engine = tts ?: return
+        val chunks = text.split(Regex("(?<=[.!?:])\\s+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (chunks.isEmpty()) {
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), idPrefix)
+            return
+        }
+        engine.speak(chunks[0], TextToSpeech.QUEUE_FLUSH, loudParams(), idPrefix)
+        for (i in 1 until chunks.size) {
+            try {
+                engine.playSilentUtterance(110L, TextToSpeech.QUEUE_ADD, "$idPrefix-pause$i")
+            } catch (e: Exception) {
+            }
+            engine.speak(chunks[i], TextToSpeech.QUEUE_ADD, loudParams(), "$idPrefix-$i")
         }
     }
 
@@ -175,8 +200,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         @JavascriptInterface
         fun speak(text: String) {
             if (ttsReady && tts != null) {
-                lastSpokenText = text; lastLocale = Locale.US; lastPitch = 0.48f; lastRate = 0.80f
-                applyVoice(Locale.US, 0.48f, 0.80f)
+                lastSpokenText = text; lastLocale = Locale.US; lastPitch = 0.82f; lastRate = 0.84f
+                applyVoice(Locale.US, 0.82f, 0.84f)
                 tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), "IntroTTS")
             }
         }
@@ -188,7 +213,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val loc = Locale.forLanguageTag(lang)
                 lastSpokenText = text; lastLocale = loc; lastPitch = pitch; lastRate = rate
                 applyVoice(loc, pitch, rate)
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), "ReadAloud")
+                speakNaturally(text, "ReadAloud")
             }
         }
 

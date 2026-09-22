@@ -453,8 +453,6 @@ class Game {
                 if (el.parentElement && el.parentElement.closest('h1, h2, h3, p, label, button, li, td, th, .stat-item')) return;
                 let t = (el.innerText || '').replace(/\s+/g, ' ').trim();
                 if (!t) return;
-                // digits in the room code are read one by one
-                if (el.classList.contains('room-code-display') && /^\d{4}$/.test(t)) t = t.split('').join(' ');
                 parts.push(t);
             });
         });
