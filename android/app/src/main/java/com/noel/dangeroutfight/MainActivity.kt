@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     forceLocalVoice = true
                     android.os.Handler(mainLooper).post {
                         applyVoice(lastLocale, lastPitch, lastRate)
-                        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId ?: "Retry")
+                        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), utteranceId ?: "Retry")
                     }
                 }
             })
@@ -150,6 +150,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
         engine.setPitch(if (lastVoiceWasNeural) (pitch + 0.15f).coerceAtMost(1.0f) else pitch)
         engine.setSpeechRate(rate)
+        // Speak on the media stream at full volume so the narrator carries over the game
+        try {
+            engine.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+        } catch (e: Exception) {
+        }
+    }
+
+    // Max volume for the utterance itself (independent of the device volume slider)
+    private fun loudParams(): Bundle {
+        val params = Bundle()
+        params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_MUSIC)
+        return params
     }
 
     inner class AndroidTTSInterface {
@@ -159,7 +177,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             if (ttsReady && tts != null) {
                 lastSpokenText = text; lastLocale = Locale.US; lastPitch = 0.48f; lastRate = 0.80f
                 applyVoice(Locale.US, 0.48f, 0.80f)
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "IntroTTS")
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), "IntroTTS")
             }
         }
 
@@ -170,7 +188,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val loc = Locale.forLanguageTag(lang)
                 lastSpokenText = text; lastLocale = loc; lastPitch = pitch; lastRate = rate
                 applyVoice(loc, pitch, rate)
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ReadAloud")
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, loudParams(), "ReadAloud")
             }
         }
 

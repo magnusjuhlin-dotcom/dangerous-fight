@@ -14,7 +14,9 @@ class AudioSynth {
         // Listeners to activate AudioContext on user interaction (touchend/click are safe mobile gestures)
         const unlock = () => {
             this.init();
-            this.startMusic();
+            // Do not start the soundtrack on top of the narrator (the very first
+            // tap may well be the read-aloud button)
+            if (!this._musicWasPlaying && !this.isReadingAloud()) this.startMusic();
             window.removeEventListener('click', unlock);
             window.removeEventListener('touchend', unlock);
         };
@@ -582,6 +584,7 @@ class AudioSynth {
     }
 
     stopReadAloud() {
+        if (this._musicWasPlaying) { this._musicWasPlaying = false; this.startMusic(); }
         if (window.AndroidTTS && window.AndroidTTS.stop) {
             try { window.AndroidTTS.stop(); } catch (e) {}
         }
@@ -597,6 +600,14 @@ class AudioSynth {
         const clean = (text || '').trim();
         if (!clean) { if (onEnd) onEnd(); return false; }
 
+        // Pause the music so the narrator is not fighting the soundtrack
+        this._musicWasPlaying = this.musicPlaying;
+        if (this.musicPlaying) this.stopMusic();
+        const finish = () => {
+            if (this._musicWasPlaying) { this._musicWasPlaying = false; this.startMusic(); }
+            if (onEnd) onEnd();
+        };
+
         if (window.AndroidTTS && window.AndroidTTS.speakText) {
             try {
                 // Deep bass narrator voice, like the intro
@@ -611,6 +622,7 @@ class AudioSynth {
             }
             // The native side has no callback into the page: poll until it goes quiet
             let armed = false;
+            const onEndNative = finish;
             let quiet = 0;
             this._readAloudPoll = setInterval(() => {
                 let speaking = false;
@@ -620,7 +632,7 @@ class AudioSynth {
                 if (armed && ++quiet >= 4) {
                     clearInterval(this._readAloudPoll);
                     this._readAloudPoll = null;
-                    if (onEnd) onEnd();
+                    onEndNative();
                 }
             }, 250);
             // Safety: if it never started (missing language etc.), give up after 3 s
@@ -628,7 +640,7 @@ class AudioSynth {
                 if (this._readAloudPoll && !armed) {
                     clearInterval(this._readAloudPoll);
                     this._readAloudPoll = null;
-                    if (onEnd) onEnd();
+                    finish();
                 }
             }, 3000);
             return true;
@@ -644,13 +656,14 @@ class AudioSynth {
             const male = voices.find(v => /male|man\b|oskar|erik|magnus|per\b|mattias|sven|bengt|klaus/i.test(v.name) && !/female|kvinna/i.test(v.name));
             const sv = male || voices[0];
             if (sv) utterance.voice = sv;
-            utterance.onend = () => { if (onEnd) onEnd(); };
-            utterance.onerror = () => { if (onEnd) onEnd(); };
+            utterance.volume = 1.0; // as loud as the platform allows
+            utterance.onend = () => finish();
+            utterance.onerror = () => finish();
             window.speechSynthesis.speak(utterance);
             return true;
         }
 
-        if (onEnd) onEnd();
+        finish();
         return false;
     }
 
