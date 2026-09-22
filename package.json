@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "itty-sockets": "^0.9.3"
+  }
+}

@@ -112,6 +112,7 @@ export class Enemy {
 
     setVehicleType(type) {
         const p = this.profiles[type] || this.profiles.katana;
+        this.activeWeaponKey = this.profiles[type] ? type : 'katana';
         this.radius = p.radius;
         this.mass = p.mass;
         this.color = p.color;
@@ -119,6 +120,17 @@ export class Enemy {
 
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
+
+        // Multiplayer: this object is a replica of the opponent, who owns
+        // their own hp/death and reports it via 'sync'. Only show the hit.
+        if (this.game && this.game.isMultiplayer) {
+            particleSystem.spawnDamageText(this.x, this.y, `-${Math.round(amount)}`, '#00f0ff', 1.1);
+            particleSystem.spawnClashSparks(this.x, this.y, this.color);
+            particleSystem.spawnDigitalBleed(this.x, this.y, this.color);
+            canvasController.flash('rgba(0, 240, 255, 0.2)', 180);
+            canvasController.shake(6, 150);
+            return;
+        }
         
         let dmg = amount;
         
@@ -149,6 +161,10 @@ export class Enemy {
 
         this.hp = Math.max(0, this.hp - dmg);
         
+        // Physical Damage Text & Ground Scorch Decal
+        particleSystem.spawnDamageText(this.x, this.y, `-${Math.round(dmg)}`, '#00f0ff', 1.1);
+        particleSystem.addDecal(this.x, this.y, 22, 'rgba(0,0,0,0.65)', 'scorch');
+        
         // Spark particles at closest hit node
         let sparkX = this.x;
         let sparkY = this.y;
@@ -164,6 +180,7 @@ export class Enemy {
             });
         }
         particleSystem.spawnClashSparks(sparkX, sparkY, this.color);
+        particleSystem.spawnDigitalBleed(sparkX, sparkY, this.color);
         canvasController.flash('rgba(0, 240, 255, 0.2)', 180); // Cyan flash when damaging enemy
         canvasController.shake(6, 150);
         
@@ -174,6 +191,10 @@ export class Enemy {
             this.vy = 0;
             this.aiState = 'idle';
             this.aiTimer = 3000;
+            
+            if (this.game && typeof this.game.onEnemyDefeated === 'function') {
+                this.game.onEnemyDefeated(this.isBoss);
+            }
             
             // Explosion particles on all joints if boss
             if (this.isBoss && this.ragdollNodes) {
@@ -242,7 +263,6 @@ export class Enemy {
             });
 
             // Solve distance constraints
-            // Solve distance constraints
             for (let iter = 0; iter < 4; iter++) {
                 this.ragdollConstraints.forEach(([idxA, idxB, restLength]) => {
                     const nodeA = this.ragdollNodes[idxA];
@@ -294,7 +314,7 @@ export class Enemy {
                     bounced = true;
                 }
                 if (bounced && Math.hypot(node.vx, node.vy) > 0.05 && audioController) {
-                    audioController.playClick();
+                    audioController.playWallThud(Math.hypot(node.vx, node.vy) * 2.0);
                 }
             });
 
@@ -322,39 +342,39 @@ export class Enemy {
             this.vy *= Math.pow(this.friction, deltaTime / 16);
             
             let bounced = false;
+            let impactSpeed = Math.hypot(this.vx, this.vy);
             if (this.x < this.radius) {
                 this.x = this.radius;
-                this.vx = -this.vx * 0.6;
+                this.vx = -this.vx * 0.72;
                 bounced = true;
             } else if (this.x > width - this.radius) {
                 this.x = width - this.radius;
-                this.vx = -this.vx * 0.6;
+                this.vx = -this.vx * 0.72;
                 bounced = true;
             }
             
             if (this.y < this.radius) {
                 this.y = this.radius;
-                this.vy = -this.vy * 0.6;
+                this.vy = -this.vy * 0.72;
                 bounced = true;
             } else if (this.y > height - this.radius) {
                 this.y = height - this.radius;
-                this.vy = -this.vy * 0.6;
+                this.vy = -this.vy * 0.72;
                 bounced = true;
             }
             
-            if (bounced && Math.hypot(this.vx, this.vy) > 0.03 && audioController) {
-                audioController.playClick();
+            if (bounced && impactSpeed > 0.03 && audioController) {
+                audioController.playWallThud(impactSpeed * 3.0);
             }
             
             const speed = Math.hypot(this.vx, this.vy);
-            if (speed > 0.05) {
-                this.angle = Math.atan2(this.vy, this.vx);
+            if (speed > 0.04) {
+                const targetAngle = Math.atan2(this.vy, this.vx);
+                let angleDiff = targetAngle - this.angle;
+                while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                this.angle += angleDiff * Math.min(1.0, 0.18 * (deltaTime / 16));
             }
-        }
-
-        // --- SINGLE PLAYER AI CONTROLLER ---
-        if (!this.game.isMultiplayer) {
-            this.updateAI(deltaTime, player, particleSystem, width, height);
         }
 
         // Maintain trail history for standard enemy
@@ -374,6 +394,11 @@ export class Enemy {
             } else {
                 this.trailHistory = [];
             }
+        }
+
+        // --- SINGLE PLAYER AI CONTROLLER ---
+        if (!this.game.isMultiplayer) {
+            this.updateAI(deltaTime, player, particleSystem, width, height);
         }
     }
 
@@ -397,27 +422,6 @@ export class Enemy {
             }
         } else {
             this.chargeTimer = 0;
-        }
-
-        // Melee punch logic for boss
-        if (this.isBoss && this.ragdollNodes) {
-            const distToPlayer = Math.hypot(player.x - this.x, player.y - this.y);
-            if (distToPlayer < 200) {
-                const leftHand = this.ragdollNodes[2];
-                const rightHand = this.ragdollNodes[3];
-                const angleToPlayer = Math.atan2(player.y - this.y, player.x - this.x);
-                
-                // Pull hands towards player to punch!
-                leftHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
-                leftHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
-                rightHand.vx += Math.cos(angleToPlayer) * 0.025 * deltaTime;
-                rightHand.vy += Math.sin(angleToPlayer) * 0.025 * deltaTime;
-
-                if (Math.random() < 0.04) {
-                    particleSystem.spawnClashSparks(leftHand.x, leftHand.y, '#ff0055');
-                    particleSystem.spawnClashSparks(rightHand.x, rightHand.y, '#ff0055');
-                }
-            }
         }
 
         // AI decision logic
@@ -452,11 +456,13 @@ export class Enemy {
                     const dxRight = player.x - rightHand.x;
                     this.game.spawnProjectile(rightHand.x, rightHand.y, dxRight * 0.0015, speed, 8, 'enemy');
                 } else {
-                    const startX = width / 2;
-                    const startY = 90;
+                    // Fire from where the samurai actually is, aimed at the player
+                    const startX = this.x;
+                    const startY = this.y;
                     const dx = player.x - startX;
                     const speed = 0.45;
                     this.game.spawnProjectile(startX, startY, dx * 0.0015, speed, 8, 'enemy');
+                    this.vy -= 0.045 / this.mass; // recoil, like the player
                 }
             } else {
                 // Ram/dash towards player or player tower
@@ -481,6 +487,7 @@ export class Enemy {
         // Standard or Boss Mecha Shogun Enemy rendering
         const renderRadius = this.isBoss ? this.radius * 1.25 : this.radius;
         const enemyColor = this.color || '#ff0077';
+        const currentSpeed = Math.hypot(this.vx, this.vy);
 
         canvasController.drawSamuraiCharacter(
             ctx, 
@@ -495,7 +502,8 @@ export class Enemy {
             0, 
             this.hp / this.maxHp,
             this.trailHistory,
-            (this.y < 150)
+            (this.y < 150),
+            currentSpeed
         );
 
         ctx.restore();

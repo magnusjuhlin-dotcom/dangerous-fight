@@ -60,7 +60,7 @@ export class Player {
                 baseHp: 150,
                 ramDamage: 180,
                 speedMultiplier: 0.75,
-                color: "#ff0077"
+                color: "#a25bff"
             },
             hammer: {
                 name: "Shadow Ninja",
@@ -69,7 +69,7 @@ export class Player {
                 baseHp: 70,
                 ramDamage: 70,
                 speedMultiplier: 1.35,
-                color: "#ff9900"
+                color: "#39ff14"
             }
         };
     }
@@ -154,7 +154,10 @@ export class Player {
         const dist = Math.hypot(this.aimDx, this.aimDy);
         if (dist > 15) {
             // Slingshot velocity scale: launch opposite to drag direction
-            const launchScale = 0.12 * this.profile.speedMultiplier;
+            // Full 120 px pull = ~0.66 px/ms: a hair faster than the AI's dashes and in
+            // line with the keyboard launch (0.45). The old 0.12 gave 10+ px/ms, which
+            // shot the samurai across the arena in a few frames like a pinball.
+            const launchScale = 0.0055 * this.profile.speedMultiplier;
             this.vx = -this.aimDx * launchScale;
             this.vy = -this.aimDy * launchScale;
             
@@ -208,6 +211,11 @@ export class Player {
                 // Standard Puls-Laser
                 this.game.spawnProjectile(startX, startY, 0, -speed, 8 + sizeBonus, 'player', 'laser');
             }
+            // Recoil kickback on weapon firing
+            this.vy += (0.045 / this.mass);
+            if (this.game.canvasCtrl) {
+                this.game.canvasCtrl.shake(2, 60);
+            }
         });
     }
 
@@ -239,8 +247,13 @@ export class Player {
         
         this.hp = Math.max(0, this.hp - dmg);
         
+        // Physical Damage Text & Ground Scorch Decal
+        particleSystem.spawnDamageText(this.x, this.y, `-${Math.round(dmg)}`, '#ff0055', 1.1);
+        particleSystem.addDecal(this.x, this.y, 22, 'rgba(0,0,0,0.65)', 'scorch');
+
         // Spark particles
         particleSystem.spawnClashSparks(this.x, this.y, this.color);
+        particleSystem.spawnDigitalBleed(this.x, this.y, this.color);
         canvasController.flash('rgba(255, 0, 51, 0.4)', 220); // brief red damage flash
         canvasController.shake(8, 180);
         
@@ -266,6 +279,11 @@ export class Player {
     }
 
     update(deltaTime, width, height, particleSystem) {
+        // Low HP Ember Smoke Plumes
+        if (this.state !== 'dead' && this.hp < this.maxHp * 0.4) {
+            particleSystem.spawnDamageEmbers(this.x, this.y, '#ff3300');
+        }
+
         // Update active shield cooldown
         if (this.activePerk === 'shieldCharge' && this.state !== 'dead') {
             if (this.shieldHp === 0) {
@@ -293,43 +311,54 @@ export class Player {
             return;
         }
 
-        // Apply friction
+        // Apply friction & momentum
         if (!this.isAiming) {
             this.x += this.vx * deltaTime;
             this.y += this.vy * deltaTime;
+
+            const speed = Math.hypot(this.vx, this.vy);
+            if (speed > 0.22 && Math.random() < 0.25) {
+                particleSystem.addDecal(this.x, this.y, 6, 'rgba(0,0,0,0.5)', 'skid', this.angle);
+            }
+
             const currentFriction = this.activeWeaponKey === 'hammer' ? 0.99 : this.friction;
             this.vx *= Math.pow(currentFriction, deltaTime / 16);
             this.vy *= Math.pow(currentFriction, deltaTime / 16);
             
             let bounced = false;
+            let impactSpeed = speed;
             if (this.x < this.radius) {
                 this.x = this.radius;
-                this.vx = -this.vx * 0.6;
+                this.vx = -this.vx * 0.72; // improved restitution
                 bounced = true;
             } else if (this.x > width - this.radius) {
                 this.x = width - this.radius;
-                this.vx = -this.vx * 0.6;
+                this.vx = -this.vx * 0.72;
                 bounced = true;
             }
             
             if (this.y < this.radius) {
                 this.y = this.radius;
-                this.vy = -this.vy * 0.6;
+                this.vy = -this.vy * 0.72;
                 bounced = true;
             } else if (this.y > height - this.radius) {
                 this.y = height - this.radius;
-                this.vy = -this.vy * 0.6;
+                this.vy = -this.vy * 0.72;
                 bounced = true;
             }
             
-            if (bounced && Math.hypot(this.vx, this.vy) > 0.03) {
-                this.game.audioSynth.playClick();
+            if (bounced && impactSpeed > 0.04) {
+                particleSystem.spawnClashSparks(this.x, this.y, '#ffffff');
+                this.game.audioSynth.playWallThud(impactSpeed * 3.0);
             }
             
-            // Cap velocities
-            const speed = Math.hypot(this.vx, this.vy);
-            if (speed > 0.05) {
-                this.angle = Math.atan2(this.vy, this.vx);
+            // Smooth angular rotation interpolation (banking dynamic tilt)
+            if (speed > 0.04) {
+                const targetAngle = Math.atan2(this.vy, this.vx);
+                let angleDiff = targetAngle - this.angle;
+                while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                this.angle += angleDiff * Math.min(1.0, 0.18 * (deltaTime / 16));
             }
         }
 
@@ -407,7 +436,9 @@ export class Player {
             ctx.restore();
         }
 
-        // Draw the samurai character
+        const currentSpeed = Math.hypot(this.vx, this.vy);
+
+        // Draw the samurai character with realistic speed effects and dynamic shadow
         canvasController.drawSamuraiCharacter(
             ctx, 
             this.x, 
@@ -421,7 +452,8 @@ export class Player {
             this.aimDy, 
             this.hp / this.maxHp,
             this.trailHistory,
-            (this.y > this.game.canvasCtrl.height - 150)
+            (this.y > this.game.canvasCtrl.height - 150),
+            currentSpeed
         );
 
         ctx.restore();

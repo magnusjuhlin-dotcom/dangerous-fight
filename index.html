@@ -8,17 +8,32 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
-    <!-- Load PeerJS for WebRTC multiplayer -->
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- Read-aloud: speaks all text on the current screen -->
+    <button id="btn-speak" class="btn-speak" type="button" aria-label="Läs upp texten på skärmen" title="Läs upp texten">🔊</button>
     <div id="game-container">
         <!-- The HTML5 Canvas for high-performance 60FPS neon rendering -->
         <canvas id="game-canvas"></canvas>
 
         <!-- Dynamic HUD (Heads-Up Display) -->
         <div id="hud" class="hud-panel hidden">
+            <!-- 4 Minute Match Timer -->
+            <div id="match-timer" class="match-timer-box">04:00</div>
+
+            <!-- Match Score and Kills Live Display -->
+            <div id="hud-score-box" class="hud-score-box">
+                <div class="hud-score-item">
+                    <span class="hud-score-label">POÄNG</span>
+                    <span id="hud-score-val" class="hud-score-value">0</span>
+                </div>
+                <div class="hud-score-item hud-kills-item">
+                    <span class="hud-score-label">KILLS</span>
+                    <span id="hud-kills-val" class="hud-kills-value">0</span>
+                </div>
+            </div>
+
             <!-- Boss Warning Banner -->
             <div id="boss-warning" class="boss-warning-banner hidden">VARNING: SVÅR BOSS KOMMER! 💀</div>
 
@@ -68,18 +83,34 @@
             <div class="menu-buttons">
                 <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
                 <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
+                <button id="btn-scoreboard" class="btn btn-secondary neon-btn-orange">POÄNGTAVLA 🏆</button>
                 <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">SAMURAI-DOJO</button>
                 <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">SVÄRDSVÅG-BUTIK</button>
                 <button id="btn-upgrades" class="btn btn-secondary neon-btn-green">UPPGRADERINGAR</button>
+                <button id="btn-howto" class="btn btn-secondary neon-btn-cyan">HUR SPELAR MAN? ❔</button>
             </div>
             
             <div class="high-score-display">HÖGSTA VÅG: <span id="highest-wave-val">1</span></div>
         </div>
 
-        <!-- MULTIPLAYER JOIN / HOST OVERLAY -->
-        <div id="multiplayer-menu" class="overlay-screen hidden">
+        <!-- QUICK MATCH / MATCHMAKING OVERLAY -->
+        <div id="matchmaking-screen" class="overlay-screen hidden">
             <h2>SPELA ONLINE</h2>
-            <p class="section-desc">Anslut till en kompis via WebRTC</p>
+            <p class="section-desc">Du matchas automatiskt mot nästa spelare som söker.</p>
+            <div class="mm-radar"><div class="mm-radar-sweep"></div><div class="mm-radar-dot"></div></div>
+            <div class="lobby-status" id="mm-status">Söker motståndare...</div>
+            <div class="mm-timer" id="mm-timer">0:00</div>
+
+            <div class="menu-buttons">
+                <button id="btn-mm-code" class="btn btn-secondary neon-btn-cyan">SPELA MED KOMPIS (KOD)</button>
+                <button id="btn-mm-back" class="btn btn-secondary back-btn">AVBRYT</button>
+            </div>
+        </div>
+
+        <!-- PRIVATE ROOM (CODE) MENU -->
+        <div id="multiplayer-menu" class="overlay-screen hidden">
+            <h2>SPELA MED KOMPIS</h2>
+            <p class="section-desc">Skapa ett privat rum och dela koden, eller anslut med en kod du fått.</p>
 
             <div class="menu-buttons">
                 <button id="btn-create-room" class="btn btn-primary neon-btn-cyan">SKAPA NYTT RUM</button>
@@ -90,9 +121,11 @@
 
         <!-- CREATE ROOM LOBBY OVERLAY -->
         <div id="lobby-screen" class="overlay-screen hidden">
-            <h2>RUM SKAPAT</h2>
-            <p class="section-desc">Dela denna kod med din motståndare:</p>
-            <div class="room-code-display" id="lobby-code-val">----</div>
+            <h2 id="lobby-title">RUM SKAPAT</h2>
+            <div id="lobby-code-block">
+                <p class="section-desc">Dela denna kod med din motståndare:</p>
+                <div class="room-code-display" id="lobby-code-val">----</div>
+            </div>
             <div class="lobby-status">Väntar på att Spelare 2 ansluter...</div>
             <button id="btn-lobby-back" class="btn btn-secondary back-btn">AVBRYT</button>
         </div>
@@ -101,7 +134,7 @@
         <div id="join-room-screen" class="overlay-screen hidden">
             <h2>ANSLUT TILL RUM</h2>
             <p class="section-desc">Mata in den 4-siffriga rums-koden:</p>
-            <input type="text" id="input-room-code" maxlength="4" placeholder="KOD" autocomplete="off" class="neon-input">
+            <input type="text" id="input-room-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="KOD" autocomplete="off" class="neon-input">
             <button id="btn-connect-peer" class="btn btn-primary neon-btn-pink">ANSLUT</button>
             <div id="join-status-text" class="status-msg"></div>
             <button id="btn-join-back" class="btn btn-secondary back-btn">TILLBAKA</button>
@@ -157,7 +190,7 @@
         <!-- CANNON SHOP OVERLAY -->
         <div id="cannons-menu" class="overlay-screen hidden">
             <h2>SVÄRDSVÅG-BUTIK</h2>
-            <p class="section-desc">Köp och utrusta olika svärdsvågs-tekniker till din samuraj. Lås upp med Credits ⚡</p>
+            <p class="section-desc">Köp och utrusta svärdsvågs-tekniker till din samuraj. Max 2 aktiva samtidigt – båda avfyras vid varje skott. Lås upp med Credits ⚡</p>
             
             <div class="weapons-grid">
                 <!-- Puls Laser -->
@@ -269,7 +302,7 @@
                         <p>Ökar ditt torns hälsa så det tål mer stryk (+50 HP/nivå).</p>
                     </div>
                     <div class="upgrade-control">
-                        <span class="upgrade-level">Nivå 0/5</span>
+                        <span class="upgrade-level">Nivå 0</span>
                         <button class="btn btn-upgrade neon-btn-cyan" data-upgrade="health">Köp ⚡ <span class="cost-val">30</span></button>
                     </div>
                 </div>
@@ -281,7 +314,7 @@
                         <p>Laddar upp skott snabbare när bilen står i laddningszonen (+15%/nivå).</p>
                     </div>
                     <div class="upgrade-control">
-                        <span class="upgrade-level">Nivå 0/5</span>
+                        <span class="upgrade-level">Nivå 0</span>
                         <button class="btn btn-upgrade neon-btn-pink" data-upgrade="posture">Köp ⚡ <span class="cost-val">40</span></button>
                     </div>
                 </div>
@@ -293,7 +326,7 @@
                         <p>Få fler Cyber-Credits per besegrad motståndare (+20%/nivå).</p>
                     </div>
                     <div class="upgrade-control">
-                        <span class="upgrade-level">Nivå 0/5</span>
+                        <span class="upgrade-level">Nivå 0</span>
                         <button class="btn btn-upgrade neon-btn-orange" data-upgrade="credits">Köp ⚡ <span class="cost-val">50</span></button>
                     </div>
                 </div>
@@ -313,18 +346,149 @@
             </div>
         </div>
 
+        <!-- HOW TO PLAY OVERLAY -->
+        <div id="howto-screen" class="overlay-screen hidden">
+            <h2>HUR SPELAR MAN?</h2>
+            <p class="section-desc">Riv motståndarens torn innan tiden (4 min) tar slut. Ditt torn står längst ner.</p>
+
+            <div class="howto-list">
+                <div class="howto-item">
+                    <div class="howto-icon">🏹</div>
+                    <div>
+                        <h3>Dasha</h3>
+                        <p>Dra i din samuraj (eller var som helst på nedre halvan) som en slangbella och släpp. Längre drag = hårdare dash. På dator: <b>WASD / pilar</b>. Handkontroll (Xbox): <b>vänster spak</b> – tryck åt hållet du vill dasha och släpp, <b>X / RT</b> skjuter, <b>A</b> väljer, <b>B</b> tillbaka, <b>Y</b> läser upp.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">⚔️</div>
+                    <div>
+                        <h3>Hugg &amp; ram</h3>
+                        <p>Krocka med motståndaren i fart för <b>huggskada</b>. Ramma tornet i fart för <b>stor tornskada</b> (du tar 30 själv).</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">⚡</div>
+                    <div>
+                        <h3>Svärdsvåg</h3>
+                        <p>Stå stilla i din laddzon längst ner så laddas upp till <b>3 energi</b>. Tryck <b>SVÄRDSVÅG</b> för att skjuta rakt upp. Dashar du snabbt in i ett fiendeskott <b>parerar</b> du det tillbaka.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">🌋</div>
+                    <div>
+                        <h3>Lavan &amp; portarna</h3>
+                        <p>Lavan i mitten bränner <b>25 HP/s</b>. Portarna i kanterna är enkelriktade: vänster går bara <b>uppåt</b>, höger bara <b>nedåt</b>.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">🏆</div>
+                    <div>
+                        <h3>Vinna</h3>
+                        <p>Förstör tornet, eller ha minst tornskada när tiden är ute. Dör du respawnar du efter 3 s. Credits ⚡ köper samurajer, svärdsvågor (max 2 aktiva) och uppgraderingar.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">🌐</div>
+                    <div>
+                        <h3>Online</h3>
+                        <p><b>Spela online</b> matchar dig automatiskt mot nästa spelare. Vill du möta en kompis: <b>Spela med kompis (kod)</b> och dela den 4-siffriga koden.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="menu-buttons">
+                <button id="btn-howto-back" class="btn btn-secondary back-btn neon-btn-cyan">TILLBAKA</button>
+            </div>
+        </div>
+
+        <!-- SCOREBOARD / POÄNGTAVLA OVERLAY -->
+        <div id="scoreboard-screen" class="overlay-screen hidden">
+            <h1 class="glitch-title" data-text="POÄNGTAVLA">POÄNGTAVLA</h1>
+            <p class="subtitle orange">ARENANS BÄSTA STRIDER & STATISTIK</p>
+
+            <!-- Stats cards summary -->
+            <div class="scoreboard-stats-grid">
+                <div class="score-card highlight">
+                    <div class="score-card-label">HÖGSTA POÄNG</div>
+                    <div class="score-card-value neon-text-cyan" id="sb-high-score">0</div>
+                </div>
+                <div class="score-card">
+                    <div class="score-card-label">TOTALT POÄNG</div>
+                    <div class="score-card-value neon-text-orange" id="sb-total-score">0</div>
+                </div>
+                <div class="score-card">
+                    <div class="score-card-label">MATCHER (V / F)</div>
+                    <div class="score-card-value" id="sb-matches-winloss">0 / 0</div>
+                    <div class="score-card-sub" id="sb-winrate">0% Vinst</div>
+                </div>
+                <div class="score-card">
+                    <div class="score-card-label">BESEGRADE FIENDER</div>
+                    <div class="score-card-value neon-text-pink" id="sb-total-kills">0</div>
+                </div>
+                <div class="score-card">
+                    <div class="score-card-label">HÖGSTA VÅG</div>
+                    <div class="score-card-value neon-text-green" id="sb-highest-wave">1</div>
+                </div>
+            </div>
+
+            <!-- Leaderboard Table -->
+            <div class="leaderboard-container">
+                <h3 class="leaderboard-heading">TOPPLISTA — BÄSTA MATCHER</h3>
+                <div class="leaderboard-table-wrapper">
+                    <table class="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>POÄNG</th>
+                                <th>NAMN</th>
+                                <th>VÅG</th>
+                                <th>SAMURAJ</th>
+                                <th>RESULTAT</th>
+                                <th>KILLS</th>
+                                <th>DATUM</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                    <div id="leaderboard-empty" class="leaderboard-empty hidden">Inga matcher registrerade än. Utmana arenan för att sätta rekord!</div>
+                </div>
+            </div>
+
+            <div class="menu-buttons scoreboard-actions">
+                <button id="btn-scoreboard-back" class="btn btn-secondary back-btn neon-btn-cyan">TILLBAKA</button>
+                <button id="btn-reset-scoreboard" class="btn btn-secondary btn-danger-small">NOLLSTÄLL STATISTIK</button>
+            </div>
+        </div>
+
         <!-- GAME OVER / DEFEAT OVERLAY -->
         <div id="game-over-screen" class="overlay-screen hidden">
             <h1 class="neon-text-red glitch-title" data-text="SYSTEM DEFEAT">STRID FÖRLORAD</h1>
             <p class="subtitle red">Ditt torn förstördes.</p>
 
+            <div id="stat-defeat-highscore-badge" class="highscore-badge hidden">🏆 NYTT PERSONLIGT REKORD!</div>
+
+            <!-- Podium name entry (shown only for a top-3 placement) -->
+            <form id="podium-form-defeat" class="podium-form hidden" autocomplete="off">
+                <div class="podium-title">🏆 PALLPLATS <span class="podium-rank">#1</span>!</div>
+                <label class="podium-label" for="podium-name-defeat">Skriv ditt namn till topplistan:</label>
+                <div class="podium-row">
+                    <input type="text" id="podium-name-defeat" class="neon-input podium-input" maxlength="14" placeholder="DITT NAMN" spellcheck="false">
+                    <button type="submit" class="btn btn-primary neon-btn-cyan podium-save">SPARA</button>
+                </div>
+            </form>
+
             <div class="run-stats">
+                <div class="stat-item">Matchpoäng: <span id="stat-defeat-score" class="neon-text-cyan font-bold">0</span></div>
+                <div class="stat-item">Besegrade fiender: <span id="stat-defeat-kills" class="neon-text-pink">0</span></div>
                 <div class="stat-item">Vinnare: <span id="stat-defeat-winner" class="neon-text-red">Motståndaren</span></div>
                 <div class="stat-item">Intjänade Credits: ⚡ <span id="stat-credits-earned">0</span></div>
             </div>
 
             <div class="menu-buttons">
                 <button id="btn-restart" class="btn btn-primary neon-btn-cyan">SPELA IGEN</button>
+                <button id="btn-gameover-scoreboard" class="btn btn-secondary neon-btn-orange">VISA POÄNGTAVLA 🏆</button>
                 <button id="btn-gameover-menu" class="btn btn-secondary neon-btn-pink">HUVUDMENY</button>
             </div>
         </div>
@@ -334,18 +498,33 @@
             <h1 class="neon-text-green glitch-title" data-text="SYSTEM VICTORY">STRID VUNNEN!</h1>
             <p class="subtitle green">Du förstörde motståndarens torn.</p>
 
+            <div id="stat-victory-highscore-badge" class="highscore-badge hidden">🏆 NYTT PERSONLIGT REKORD!</div>
+
+            <!-- Podium name entry (shown only for a top-3 placement) -->
+            <form id="podium-form-victory" class="podium-form hidden" autocomplete="off">
+                <div class="podium-title">🏆 PALLPLATS <span class="podium-rank">#1</span>!</div>
+                <label class="podium-label" for="podium-name-victory">Skriv ditt namn till topplistan:</label>
+                <div class="podium-row">
+                    <input type="text" id="podium-name-victory" class="neon-input podium-input" maxlength="14" placeholder="DITT NAMN" spellcheck="false">
+                    <button type="submit" class="btn btn-primary neon-btn-cyan podium-save">SPARA</button>
+                </div>
+            </form>
+
             <div class="run-stats">
-                <div class="stat-item">Vinnare: <span class="neon-text-green">Du</span></div>
+                <div class="stat-item">Matchpoäng: <span id="stat-victory-score" class="neon-text-cyan font-bold">0</span></div>
+                <div class="stat-item">Besegrade fiender: <span id="stat-victory-kills" class="neon-text-pink">0</span></div>
+                <div class="stat-item">Vinnare: <span id="stat-victory-winner" class="neon-text-green">Du</span></div>
                 <div class="stat-item">Intjänade Credits: ⚡ <span id="stat-victory-credits">0</span></div>
             </div>
 
             <div class="menu-buttons">
                 <button id="btn-victory-restart" class="btn btn-primary neon-btn-cyan">SPELA IGEN</button>
+                <button id="btn-victory-scoreboard" class="btn btn-secondary neon-btn-orange">VISA POÄNGTAVLA 🏆</button>
                 <button id="btn-victory-menu" class="btn btn-secondary neon-btn-pink">HUVUDMENY</button>
             </div>
         </div>
     </div>
     <!-- Core Game Scripts loaded as ES6 modules -->
-    <script src="src/bundle.js?v=60"></script>
+    <script src="src/bundle.js?v=70"></script>
 </body>
 </html>
