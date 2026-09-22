@@ -613,7 +613,7 @@ export class AudioSynth {
                 // extreme pitch shifting just sounds robotic
                 // The native side picks a real (neural, male) voice and nudges the
                 // pitch back up when it is a neural one - see MainActivity.applyVoice
-                window.AndroidTTS.speakText(clean, 'sv-SE', 0.7, 0.95);
+                window.AndroidTTS.speakText(clean, 'sv-SE', 0.42, 0.92);
             } catch (e) {
                 if (onEnd) onEnd();
                 return false;
@@ -647,7 +647,7 @@ export class AudioSynth {
         if ('speechSynthesis' in window) {
             const utterance = new SpeechSynthesisUtterance(clean);
             utterance.lang = 'sv-SE';
-            utterance.pitch = 0.72; // deep but still human
+            utterance.pitch = 0.45; // dark bass narrator
             utterance.rate = 0.9;
             const voices = window.speechSynthesis.getVoices().filter(v => v.lang && v.lang.toLowerCase().startsWith('sv'));
             // Prefer a male Swedish voice when the platform offers one

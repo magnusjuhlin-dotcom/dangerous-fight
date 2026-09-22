@@ -615,7 +615,7 @@ class AudioSynth {
                 // extreme pitch shifting just sounds robotic
                 // The native side picks a real (neural, male) voice and nudges the
                 // pitch back up when it is a neural one - see MainActivity.applyVoice
-                window.AndroidTTS.speakText(clean, 'sv-SE', 0.7, 0.95);
+                window.AndroidTTS.speakText(clean, 'sv-SE', 0.42, 0.92);
             } catch (e) {
                 if (onEnd) onEnd();
                 return false;
@@ -649,7 +649,7 @@ class AudioSynth {
         if ('speechSynthesis' in window) {
             const utterance = new SpeechSynthesisUtterance(clean);
             utterance.lang = 'sv-SE';
-            utterance.pitch = 0.72; // deep but still human
+            utterance.pitch = 0.45; // dark bass narrator
             utterance.rate = 0.9;
             const voices = window.speechSynthesis.getVoices().filter(v => v.lang && v.lang.toLowerCase().startsWith('sv'));
             // Prefer a male Swedish voice when the platform offers one
@@ -3426,7 +3426,7 @@ class Player {
         this.y = y;
         this.vx = 0;
         this.vy = 0;
-        this.friction = 0.985;
+        this.friction = 0.99;   // glides further before the dash dies out
         this.isAiming = false;
         this.aimDx = 0;
         this.aimDy = 0;
@@ -3571,10 +3571,10 @@ class Player {
         const dist = Math.hypot(this.aimDx, this.aimDy);
         if (dist > 15) {
             // Slingshot velocity scale: launch opposite to drag direction
-            // Full 120 px pull = ~0.66 px/ms: a hair faster than the AI's dashes and in
-            // line with the keyboard launch (0.45). The old 0.12 gave 10+ px/ms, which
-            // shot the samurai across the arena in a few frames like a pinball.
-            const launchScale = 0.0055 * this.profile.speedMultiplier;
+            // Full 120 px pull = ~1.1 px/ms, roughly twice the AI's dash speed, so the
+            // samurai crosses the arena in well under a second. (0.12 was the old value
+            // and gave 10+ px/ms, which shot it across in a few frames like a pinball.)
+            const launchScale = 0.0092 * this.profile.speedMultiplier;
             this.vx = -this.aimDx * launchScale;
             this.vy = -this.aimDy * launchScale;
             
@@ -4757,8 +4757,8 @@ class Game {
         // Keyboard Arrow/WASD fallback
         this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
             if (this.gameState !== 'playing' || this.player.state === 'dead') return;
-            this.player.vx = dirX * 0.45 * this.player.profile.speedMultiplier;
-            this.player.vy = dirY * 0.45 * this.player.profile.speedMultiplier;
+            this.player.vx = dirX * 0.9 * this.player.profile.speedMultiplier;
+            this.player.vy = dirY * 0.9 * this.player.profile.speedMultiplier;
             this.audioSynth.playSlash(this.player.activeWeaponKey);
         };
     }
@@ -5825,9 +5825,9 @@ class Game {
             this.player.hp = Math.max(0, this.player.hp - lavaDamagePerMs * dt);
             
             // Viscous fluid drag & thermal buoyant kick
-            this.player.vx *= Math.pow(0.86, dt / 16);
-            this.player.vy *= Math.pow(0.86, dt / 16);
-            this.player.vy += 0.016 * dt; // buoyant downward repulsion
+            this.player.vx *= Math.pow(0.95, dt / 16);
+            this.player.vy *= Math.pow(0.95, dt / 16);
+            this.player.vy += 0.004 * dt; // buoyant repulsion back to your own side
             
             const now = Date.now();
             if (now - this.lastLavaSizzlePlayer > 160) {
@@ -5847,9 +5847,9 @@ class Game {
             if (!this.isMultiplayer) this.enemy.hp = Math.max(0, this.enemy.hp - lavaDamagePerMs * dt);
             
             // Viscous fluid drag & thermal buoyant kick
-            this.enemy.vx *= Math.pow(0.86, dt / 16);
-            this.enemy.vy *= Math.pow(0.86, dt / 16);
-            this.enemy.vy -= 0.016 * dt; // buoyant upward repulsion
+            this.enemy.vx *= Math.pow(0.95, dt / 16);
+            this.enemy.vy *= Math.pow(0.95, dt / 16);
+            this.enemy.vy -= 0.004 * dt; // buoyant repulsion back to its own side
             
             const now = Date.now();
             if (now - this.lastLavaSizzleEnemy > 160) {

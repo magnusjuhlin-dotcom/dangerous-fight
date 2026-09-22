@@ -363,8 +363,8 @@ class Game {
         // Keyboard Arrow/WASD fallback
         this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
             if (this.gameState !== 'playing' || this.player.state === 'dead') return;
-            this.player.vx = dirX * 0.45 * this.player.profile.speedMultiplier;
-            this.player.vy = dirY * 0.45 * this.player.profile.speedMultiplier;
+            this.player.vx = dirX * 0.9 * this.player.profile.speedMultiplier;
+            this.player.vy = dirY * 0.9 * this.player.profile.speedMultiplier;
             this.audioSynth.playSlash(this.player.activeWeaponKey);
         };
     }
@@ -1431,9 +1431,9 @@ class Game {
             this.player.hp = Math.max(0, this.player.hp - lavaDamagePerMs * dt);
             
             // Viscous fluid drag & thermal buoyant kick
-            this.player.vx *= Math.pow(0.86, dt / 16);
-            this.player.vy *= Math.pow(0.86, dt / 16);
-            this.player.vy += 0.016 * dt; // buoyant downward repulsion
+            this.player.vx *= Math.pow(0.95, dt / 16);
+            this.player.vy *= Math.pow(0.95, dt / 16);
+            this.player.vy += 0.004 * dt; // buoyant repulsion back to your own side
             
             const now = Date.now();
             if (now - this.lastLavaSizzlePlayer > 160) {
@@ -1453,9 +1453,9 @@ class Game {
             if (!this.isMultiplayer) this.enemy.hp = Math.max(0, this.enemy.hp - lavaDamagePerMs * dt);
             
             // Viscous fluid drag & thermal buoyant kick
-            this.enemy.vx *= Math.pow(0.86, dt / 16);
-            this.enemy.vy *= Math.pow(0.86, dt / 16);
-            this.enemy.vy -= 0.016 * dt; // buoyant upward repulsion
+            this.enemy.vx *= Math.pow(0.95, dt / 16);
+            this.enemy.vy *= Math.pow(0.95, dt / 16);
+            this.enemy.vy -= 0.004 * dt; // buoyant repulsion back to its own side
             
             const now = Date.now();
             if (now - this.lastLavaSizzleEnemy > 160) {

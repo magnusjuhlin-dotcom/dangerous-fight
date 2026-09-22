@@ -9,7 +9,7 @@ export class Player {
         this.y = y;
         this.vx = 0;
         this.vy = 0;
-        this.friction = 0.985;
+        this.friction = 0.99;   // glides further before the dash dies out
         this.isAiming = false;
         this.aimDx = 0;
         this.aimDy = 0;
@@ -154,10 +154,10 @@ export class Player {
         const dist = Math.hypot(this.aimDx, this.aimDy);
         if (dist > 15) {
             // Slingshot velocity scale: launch opposite to drag direction
-            // Full 120 px pull = ~0.66 px/ms: a hair faster than the AI's dashes and in
-            // line with the keyboard launch (0.45). The old 0.12 gave 10+ px/ms, which
-            // shot the samurai across the arena in a few frames like a pinball.
-            const launchScale = 0.0055 * this.profile.speedMultiplier;
+            // Full 120 px pull = ~1.1 px/ms, roughly twice the AI's dash speed, so the
+            // samurai crosses the arena in well under a second. (0.12 was the old value
+            // and gave 10+ px/ms, which shot it across in a few frames like a pinball.)
+            const launchScale = 0.0092 * this.profile.speedMultiplier;
             this.vx = -this.aimDx * launchScale;
             this.vy = -this.aimDy * launchScale;
             
