@@ -55,6 +55,18 @@ class Game {
         this.enemyRamCooldown = 0;          // one tower ram per charge (ragdoll nodes would otherwise re-trigger every frame)
         this.playerRamCooldown = 0;
 
+        // 2 vs 2: extra samurai. `ally` fights on my team, `enemy2` is the
+        // other team's second samurai. Null in a normal 1v1 match.
+        this.teamMatch = false;
+        // Set before startRun() for a team match:
+        //   { size: 2..4, allies: ['ai'|'remote', ...], foes: ['ai'|'remote', ...] }
+        // `allies`/`foes` hold the slots BESIDES this.player / this.enemy.
+        this.teamLayout = null;
+        this.teamNet = null;  // team match over the network (see TEAM NETWORKING)
+        this.allies = [];   // my team mates
+        this.foes = [];     // the other team's samurai besides this.enemy
+        this.teamRamCooldowns = new Map();
+
         // Realistic Lava Simulation state
         this.lavaTime = 0;
         this.lastLavaSizzlePlayer = 0;
@@ -151,8 +163,10 @@ class Game {
         // Cancel Host lobby
         document.getElementById('btn-lobby-back').addEventListener('click', () => {
             this.audioSynth.playClick();
+            const wasTeam = !!this.teamNet;
             this.cleanupNetwork();
-            this.uiCtrl.showScreen('multiplayer');
+            this.showTeamStartButton(false);
+            this.uiCtrl.showScreen(wasTeam ? 'team' : 'multiplayer');
         });
 
         // Join room menu
@@ -166,20 +180,91 @@ class Game {
         // Join room back
         document.getElementById('btn-join-back').addEventListener('click', () => {
             this.audioSynth.playClick();
+            const wasTeam = this.joinAsTeam || !!this.teamNet;
+            this.joinAsTeam = false;
             this.cleanupNetwork();
-            this.uiCtrl.showScreen('multiplayer');
+            this.uiCtrl.showScreen(wasTeam ? 'team' : 'multiplayer');
         });
 
-        // Connect to peer code
+        // Connect to peer code (1v1, or joining a team room)
         document.getElementById('btn-connect-peer').addEventListener('click', () => {
             this.audioSynth.playClick();
             const code = document.getElementById('input-room-code').value.trim();
-            if (code.length === 4) {
-                this.setupMultiplayerClient(code);
-            } else {
+            if (code.length !== 4) {
                 document.getElementById('join-status-text').innerText = 'Ange en 4-siffrig kod!';
+                return;
+            }
+            if (this.joinAsTeam) {
+                this.joinAsTeam = false;
+                this.setupTeamRoom(code, false, this.teamSize || 2);
+            } else {
+                this.setupMultiplayerClient(code);
             }
         });
+
+        // ---- Team matches (2v2 - 4v4) ----
+        this.teamSize = 2;
+        const teamRow = document.getElementById('team-size-row');
+        if (teamRow) {
+            teamRow.querySelectorAll('.team-size-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.audioSynth.playClick();
+                    this.teamSize = parseInt(btn.dataset.size, 10) || 2;
+                    teamRow.querySelectorAll('.team-size-btn').forEach(b => b.classList.remove('selected'));
+                    btn.classList.add('selected');
+                });
+            });
+        }
+
+        const teamBtn = document.getElementById('btn-play-team');
+        if (teamBtn) {
+            teamBtn.addEventListener('click', () => {
+                this.audioSynth.playClick();
+                this.cleanupNetwork();
+                this.uiCtrl.showScreen('team');
+            });
+        }
+
+        const bind = (id, fn) => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('click', () => { this.audioSynth.playClick(); fn(); });
+        };
+
+        bind('btn-team-back', () => {
+            this.cleanupNetwork();
+            this.gameState = 'menu';
+            this.uiCtrl.showScreen('menu');
+        });
+
+        // Everyone against the computer, no network at all
+        bind('btn-team-ai', () => {
+            this.isMultiplayer = false;
+            const size = this.teamSize || 2;
+            this.teamLayout = {
+                size,
+                allies: Array(size - 1).fill('ai'),
+                foes: Array(size - 1).fill('ai'),
+                foe0: 'ai'
+            };
+            this.startRun();
+        });
+
+        bind('btn-team-online', () => this.startTeamQuickMatch(this.teamSize || 2));
+
+        // Host a private team room and share the code
+        bind('btn-team-room', () => {
+            const code = Math.floor(1000 + Math.random() * 9000).toString();
+            this.setupTeamRoom(code, true, this.teamSize || 2);
+        });
+
+        bind('btn-team-join', () => {
+            this.joinAsTeam = true;
+            document.getElementById('join-status-text').innerText = `Ansluter till ${this.teamSize || 2} mot ${this.teamSize || 2}.`;
+            document.getElementById('input-room-code').value = '';
+            this.uiCtrl.showScreen('join');
+        });
+
+        bind('btn-team-start', () => this.startTeamMatchNow());
 
         // Garage (Weapons) menu
         document.getElementById('btn-weapons').addEventListener('click', () => {
@@ -750,6 +835,8 @@ class Game {
         }
         this.isMultiplayer = false;
         this.isClient = false;
+        this.teamNet = null;
+        this.teamLayout = null;
         this.remoteProfile = null;
         this.restartRequestedLocal = false;
         this.restartRequestedRemote = false;
@@ -776,6 +863,16 @@ class Game {
     requestRestart() {
         if (!this.isMultiplayer) {
             this.startRun();
+            return;
+        }
+        if (this.teamNet) {
+            // With up to eight players there is nobody to wait for: leave the
+            // room and go back to the team menu to pick a new match.
+            this.cleanupNetwork();
+            this.resetRestartButtons();
+            this.clearTeamMatch();
+            this.gameState = 'menu';
+            this.uiCtrl.showScreen('team');
             return;
         }
         this.restartRequestedLocal = true;
@@ -930,6 +1027,10 @@ class Game {
     }
 
     handleIncomingPacket(data) {
+        if (this.teamNet) {
+            this.handleTeamPacket(data);
+            return;
+        }
         if (data.type === 'host_ready') {
             this.applyRemoteProfile(data);
             this.sendNetworkPacket(this.buildProfilePacket('handshake'));
@@ -1044,6 +1145,20 @@ class Game {
     // replica that only the opponent may change.
     damageTower(which, amount) {
         const tower = which === 'top' ? this.topTower : this.bottomTower;
+        if (this.teamNet) {
+            // The host keeps both towers; everyone else reports the hit and
+            // waits for the host's next sync, so damage is counted once.
+            if (!this.teamNet.isHost) {
+                this.sendNetworkPacket({
+                    type: 'towerhit',
+                    team: which === 'bottom' ? this.teamNet.myTeam : this.otherTeam(),
+                    amount
+                });
+                return;
+            }
+            tower.hp = Math.max(0, tower.hp - amount);
+            return;
+        }
         if (this.isMultiplayer && which === 'top') return;
         tower.hp = Math.max(0, tower.hp - amount);
     }
@@ -1069,6 +1184,7 @@ class Game {
                 isBoss = true;
             }
         }
+        if (this.teamLayout) isBoss = false; // 2v2 always fields two plain samurai per team
         this.isHardBossRound = isBoss;
         
         // Reset towers (incorporate upgrades)
@@ -1099,7 +1215,7 @@ class Game {
         this.enemy.resetForRun(isBoss);
         if (isBoss) this.enemy.resetRagdollPositions();
 
-        if (this.isMultiplayer) {
+        if (this.isMultiplayer && !this.teamLayout) {
             // The enemy is a replica of the opponent: restore their vehicle
             // profile (resetForRun wiped it) and size their tower by their
             // own health upgrade. Live hp/maxHp values arrive via 'sync'.
@@ -1114,8 +1230,15 @@ class Game {
             this.netSyncAccumulator = 0;
         }
         
+        // 2v2: fill the two extra slots (computer or networked player)
+        if (this.teamLayout) {
+            this.setupTeamMatch(this.teamLayout);
+        } else {
+            this.clearTeamMatch();
+        }
+
         // Offer cybernetic perks in single-player before entering battle
-        if (!this.isMultiplayer) {
+        if (!this.isMultiplayer && !this.teamLayout) {
             const randomPerks = this.upgradeMgr.getRandomPerks();
             this.uiCtrl.showScreen('perks');
             this.uiCtrl.renderPerkSelection(randomPerks, (perkKey) => {
@@ -1189,7 +1312,7 @@ class Game {
     }
 
     // Projectile Spawner
-    spawnProjectile(x, y, vx, vy, radius, owner, type = 'laser') {
+    spawnProjectile(x, y, vx, vy, radius, owner, type = 'laser', replicated = false) {
         let damageCar = 25;
         let damageTower = 50;
         let color = '#00f0ff'; // cyan for player
@@ -1251,7 +1374,7 @@ class Game {
             }
             
             // Sync with remote player in multiplayer
-            if (this.isMultiplayer) {
+            if (this.isMultiplayer && !this.teamNet && !replicated) {
                 this.sendNetworkPacket({
                     type: 'projectile_fired',
                     x, y, vx, vy, radius, cannonType: type
@@ -1259,6 +1382,22 @@ class Game {
             }
         }
         
+        // In a team match I broadcast the shots I own: my own samurai, plus
+        // the computer-driven ones when I am the host. Everything tagged with
+        // the team that fired it, in shared coordinates.
+        if (this.teamNet && this.teamNet.started && !replicated) {
+            const mineToSend = owner === 'player' || this.teamNet.isHost;
+            if (mineToSend) {
+                const m = this.teamMirror({ x, y, vx, vy });
+                this.sendNetworkPacket({
+                    type: 'tshot',
+                    team: owner === 'player' ? this.teamNet.myTeam : this.otherTeam(),
+                    x: m.x, y: m.y, vx: m.vx, vy: m.vy,
+                    radius, cannonType: type
+                });
+            }
+        }
+
         this.projectiles.push({
             x, y, vx, vy, radius, owner, type, damageCar, damageTower, color
         });
@@ -1353,13 +1492,24 @@ class Game {
         if (this.playerRamCooldown > 0) this.playerRamCooldown -= dt;
 
         this.player.update(dt, this.canvasCtrl.width, this.canvasCtrl.height, this.particles);
-        this.enemy.update(enemyDt, this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+        this.enemy.update(enemyDt, this.teamMatch ? this.nearestFoeFor(this.enemy) : this.player, this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+        if (this.teamMatch) {
+            this.extraCars().forEach(car => {
+                car.update(enemyDt, this.nearestFoeFor(car), this.audioSynth, this.particles, this.canvasCtrl, this.canvasCtrl.width, this.canvasCtrl.height);
+            });
+        }
         
         this.updatePhysics(physicsDt);
         this.checkCollisions(physicsDt);
         
         // Network Sync (~30 Hz; the replica dead-reckons between packets)
-        if (this.isMultiplayer) {
+        if (this.teamNet) {
+            this.netSyncAccumulator = (this.netSyncAccumulator || 0) + dt;
+            if (this.netSyncAccumulator >= 33) {
+                this.netSyncAccumulator = 0;
+                this.sendTeamSync();
+            }
+        } else if (this.isMultiplayer) {
             this.netSyncAccumulator = (this.netSyncAccumulator || 0) + dt;
             if (this.netSyncAccumulator >= 33) {
                 this.netSyncAccumulator = 0;
@@ -1388,6 +1538,14 @@ class Game {
     handleMatchTimeout() {
         // In multiplayer the host owns the clock and the verdict; the client
         // just waits for 'match_end'.
+        if (this.teamNet && !this.teamNet.isHost) return;
+        if (this.teamNet) {
+            const myDamage = this.bottomTower.maxHp - this.bottomTower.hp;
+            const theirDamage = this.topTower.maxHp - this.topTower.hp;
+            this.particles.spawnDamageText(this.canvasCtrl.width / 2, this.canvasCtrl.height / 2, 'TIDEN UTE!', '#ffcc00', 2.0);
+            this.declareTeamEnd(theirDamage >= myDamage ? this.teamNet.myTeam : this.otherTeam());
+            return;
+        }
         if (this.isMultiplayer && this.isClient) return;
 
         // 4 minutes expired! Calculate damage taken on both sides
@@ -1447,8 +1605,10 @@ class Game {
 
         // Check enemy car in lava
         if (this.enemy.x > lavaMinX && this.enemy.x < lavaMaxX && this.enemy.y > lavaMinY && this.enemy.y < lavaMaxY && this.enemy.state !== 'dead') {
-            // In multiplayer the opponent computes their own lava damage
-            if (!this.isMultiplayer) this.enemy.hp = Math.max(0, this.enemy.hp - lavaDamagePerMs * dt);
+            // A replica computes its own lava damage on its own machine
+            if (!this.isMultiplayer || (this.teamMatch && !this.enemy.isRemote)) {
+                this.enemy.hp = Math.max(0, this.enemy.hp - lavaDamagePerMs * dt);
+            }
             
             // Viscous fluid drag & thermal buoyant kick
             this.enemy.vx *= Math.pow(0.95, dt / 16);
@@ -1488,6 +1648,13 @@ class Game {
 
         if (this.player.state !== 'dead') blockCheck(this.player);
         if (this.enemy.state !== 'dead') blockCheck(this.enemy);
+        if (this.teamMatch) {
+            this.extraCars().forEach(car => {
+                if (car.state === 'dead') return;
+                this.applyLavaToCar(car, dt, lavaMinX, lavaMaxX, lavaMinY, lavaMaxY, lavaDamagePerMs);
+                blockCheck(car);
+            });
+        }
 
         // --- 3. PROJECTILES PHYSICS ---
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -1520,6 +1687,12 @@ class Game {
             
             // One-way gate check for projectile
             blockCheck(p);
+
+            // 2v2: the extra samurai are hit before the main pair is checked
+            if (this.teamMatch && this.teamProjectileHit(p)) {
+                this.projectiles.splice(i, 1);
+                continue;
+            }
             
             // Check Tower Hits
             let hitTopTower = false;
@@ -1657,6 +1830,7 @@ class Game {
         const h = this.canvasCtrl.height;
         const playerAlive = this.player.state !== 'dead';
         const enemyAlive = this.enemy.state !== 'dead';
+        if (this.teamMatch) this.checkTeamCollisions(dt);
 
         // --- 1. SAMURAI-TO-SAMURAI ELASTIC COLLISION ---
         if (!playerAlive || !enemyAlive) {
@@ -1877,6 +2051,12 @@ class Game {
 
     checkWinCondition() {
         if (this.gameState !== 'playing') return;
+        if (this.teamNet) {
+            if (!this.teamNet.isHost) return; // the host owns both towers
+            if (this.topTower.hp <= 0) this.declareTeamEnd(this.teamNet.myTeam);
+            else if (this.bottomTower.hp <= 0) this.declareTeamEnd(this.otherTeam());
+            return;
+        }
         if (this.isMultiplayer) {
             // Only my own tower is simulated here; the opponent announces
             // their own tower's fall via 'match_end'.
@@ -2002,6 +2182,9 @@ class Game {
             this.drawTowers();
             this.player.draw(this.canvasCtrl.ctx, this.canvasCtrl);
             this.enemy.draw(this.canvasCtrl.ctx, this.canvasCtrl);
+            if (this.teamMatch) {
+                this.extraCars().forEach(car => car.draw(this.canvasCtrl.ctx, this.canvasCtrl));
+            }
         }
         
         // Restore matrix
@@ -2012,7 +2195,7 @@ class Game {
         
         // UI Hud updates
         if (this.gameState === 'playing') {
-            this.uiCtrl.updateHUD(this.player, this.enemy, this.isMultiplayer, this.isClient, this.matchTimer, this.currentScore, this.matchKills);
+            this.uiCtrl.updateHUD(this.player, this.enemy, this.isMultiplayer, this.isClient, this.matchTimer, this.currentScore, this.matchKills, this);
         }
     }
 
@@ -2318,6 +2501,671 @@ class Game {
         ctx.stroke();
 
         ctx.restore();
+    }
+
+    // ------------------------------------------------------------------
+    // TEAM NETWORKING (2v2, 3v3, 4v4)
+    //
+    // Everybody sits in one room channel. The host owns the roster, the
+    // match clock, both towers and every computer-driven samurai; each
+    // human owns their own samurai and reports its position and hp.
+    // Positions travel in "team A at the bottom" coordinates, so a team B
+    // peer mirrors them on the way out and on the way in - that way both
+    // sides always see themselves at the bottom of the screen.
+    // ------------------------------------------------------------------
+
+    otherTeam() {
+        return this.teamNet && this.teamNet.myTeam === 'a' ? 'b' : 'a';
+    }
+
+    // Local <-> shared coordinates (an involution: same maths both ways)
+    teamMirror(p) {
+        if (!this.teamNet || this.teamNet.myTeam === 'a') return { ...p };
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        const out = { ...p };
+        if (typeof p.x === 'number') out.x = w - p.x;
+        if (typeof p.y === 'number') out.y = h - p.y;
+        if (typeof p.vx === 'number') out.vx = -p.vx;
+        if (typeof p.vy === 'number') out.vy = -p.vy;
+        return out;
+    }
+
+    // Open (or join) a room that plays a team match
+    setupTeamRoom(code, isHost, size, quick = false, electing = false) {
+        this.cleanupNetwork();
+        this.isMultiplayer = true;
+        this.isClient = !isHost;
+        this.gameState = 'lobby';
+        this.roomId = code;
+        this.quickMatch = quick;
+
+        this.teamNet = {
+            code,
+            isHost,
+            size,
+            quick,
+            electing,
+            seen: new Set(),
+            myId: Math.random().toString(36).slice(2, 10),
+            myTeam: 'a',
+            mySlot: 0,
+            peers: [],          // host's roster: [{ id, team, slot }]
+            carBySlot: new Map(),
+            started: false
+        };
+
+        const codeEl = document.getElementById('lobby-code-val');
+        if (codeEl) codeEl.innerText = code;
+        const codeBlock = document.getElementById('lobby-code-block');
+        if (codeBlock) codeBlock.classList.toggle('hidden', quick);
+        const titleEl = document.getElementById('lobby-title');
+        if (titleEl) titleEl.innerText = `${size} MOT ${size}`;
+        this.uiCtrl.showScreen('lobby');
+        this.updateTeamLobby('Kopplar upp...');
+
+        this.ws = new WebSocket(`wss://itty.ws/c/dangerousfight-${code}`);
+
+        this.ws.onopen = () => {
+            if (electing) {
+                // Nobody owns this room yet: everyone says hello and the
+                // lowest id takes the host seat once the dust settles.
+                this.teamNet.seen.add(this.teamNet.myId);
+                const hello = () => this.sendNetworkPacket({ type: 'team_hello', id: this.teamNet.myId, size });
+                hello();
+                this.mmTimers.push(setInterval(hello, 700));
+                this.mmTimers.push(setTimeout(() => this.finishTeamElection(), 2500));
+                this.updateTeamLobby('Söker spelare...');
+            } else if (isHost) {
+                this.teamNet.peers = [{ id: this.teamNet.myId, team: 'a', slot: 0 }];
+                this.updateTeamLobby('Väntar på spelare...');
+                this.showTeamStartButton(true);
+            } else {
+                this.sendNetworkPacket({ type: 'team_hello', id: this.teamNet.myId, size });
+                this.updateTeamLobby('Ansluten. Väntar på värden...');
+            }
+        };
+
+        this.ws.onmessage = (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                if (payload.self) return;
+                const data = payload.message || payload;
+
+                if (payload.type === 'leave' && this.teamNet && this.teamNet.isHost && !this.teamNet.started) {
+                    this.updateTeamLobby('En spelare lämnade rummet.');
+                    return;
+                }
+                if (data && data.type) this.handleIncomingPacket(data);
+            } catch (err) {
+                console.error('Team packet error:', err);
+            }
+        };
+
+        this.ws.onerror = () => this.updateTeamLobby('Nätverksfel.');
+        this.ws.onclose = () => {
+            if (!this.teamNet) return;
+            if (!this.teamNet.started) {
+                this.updateTeamLobby('Anslutningen bröts.');
+            } else if (this.gameState === 'playing') {
+                this.handleOpponentLeft('Anslutningen bröts');
+            }
+        };
+    }
+
+    // Online team match: join the shared room for this team size. The room
+    // itself is the lobby - the lowest id becomes host, seats everyone who
+    // said hello and fills the rest of the seats with computer samurai.
+    startTeamQuickMatch(size, roomIndex = 1) {
+        this.setupTeamRoom(`team${size}-${roomIndex}`, false, size, true, true);
+        this.teamNet.roomIndex = roomIndex;
+    }
+
+    finishTeamElection() {
+        const t = this.teamNet;
+        if (!t || !t.electing || t.started) return;
+        t.electing = false;
+        const ids = [...t.seen].sort();
+        if (ids[0] !== t.myId) {
+            // Someone else hosts: keep saying hello until their roster arrives
+            this.updateTeamLobby('Väntar på värden...');
+            return;
+        }
+        t.isHost = true;
+        this.isClient = false;
+        t.peers = [{ id: t.myId, team: 'a', slot: 0 }];
+        ids.filter(id => id !== t.myId).forEach(id => this.seatTeamPeer(id));
+        this.updateTeamLobby('Du är värd. Väntar på fler spelare...');
+        this.showTeamStartButton(true);
+        // Start on a full room, or after a short wait with computer stand-ins
+        this.mmTimers.push(setTimeout(() => {
+            if (this.teamNet === t && !t.started) {
+                this.updateTeamLobby('Startar med datorspelare på tomma platser...');
+                this.startTeamMatchNow();
+            }
+        }, 10000));
+    }
+
+    updateTeamLobby(message) {
+        const status = document.querySelector('.lobby-status');
+        if (!status || !this.teamNet) return;
+        const humans = this.teamNet.isHost ? this.teamNet.peers.length : (this.teamNet.lobbyCount || 1);
+        const seats = this.teamNet.size * 2;
+        status.innerText = `${message} (${humans}/${seats} spelare, tomma platser fylls av datorn)`;
+    }
+
+    showTeamStartButton(show) {
+        const btn = document.getElementById('btn-team-start');
+        if (btn) btn.classList.toggle('hidden', !show);
+    }
+
+    // Host: hand out teams and kick the match off
+    startTeamMatchNow() {
+        if (!this.teamNet || !this.teamNet.isHost || this.teamNet.started) return;
+        const roster = { type: 'team_roster', size: this.teamNet.size, peers: this.teamNet.peers };
+        this.sendNetworkPacket(roster);
+        this.applyTeamRoster(roster);
+    }
+
+    // Seat a joining player. In a private room your friends join YOUR team
+    // first, so you can take on the computer together; in an online match the
+    // seats alternate (a0, b0, a1, b1) so both teams get real players.
+    seatTeamPeer(id) {
+        const t = this.teamNet;
+        if (!t || !t.isHost || t.started) return;
+        if (t.peers.some(p => p.id === id)) return;
+        const taken = new Set(t.peers.map(p => p.team + p.slot));
+        const seats = [];
+        if (t.quick) {
+            for (let slot = 0; slot < t.size; slot++) for (const team of ['a', 'b']) seats.push([team, slot]);
+        } else {
+            for (const team of ['a', 'b']) for (let slot = 0; slot < t.size; slot++) seats.push([team, slot]);
+        }
+        for (const [team, slot] of seats) {
+            {
+                const key = team + slot;
+                if (taken.has(key)) continue;
+                t.peers.push({ id, team, slot });
+                // Only a headcount while we wait - the roster is what starts
+                // the match, so it must not go out until the teams are final.
+                this.sendNetworkPacket({ type: 'team_lobby', count: t.peers.length, size: t.size });
+                this.updateTeamLobby('Spelare anslöt!');
+                if (t.peers.length >= t.size * 2) this.startTeamMatchNow();
+                return;
+            }
+        }
+    }
+
+    // Everyone: build the arena the roster describes
+    applyTeamRoster(roster) {
+        const t = this.teamNet;
+        if (!t) return;
+        t.started = true;
+        this.cleanupMatchmaking(); // stop saying hello, the room is settled
+        t.size = roster.size;
+        t.peers = roster.peers;
+        this.showTeamStartButton(false);
+
+        const me = roster.peers.find(p => p.id === t.myId);
+        t.myTeam = me ? me.team : 'a';
+        t.mySlot = me ? me.slot : 0;
+        const foeTeam = this.otherTeam();
+
+        const humanAt = (team, slot) => roster.peers.some(p => p.team === team && p.slot === slot);
+        const others = [];
+        for (let i = 0; i < roster.size; i++) if (i !== t.mySlot) others.push(i);
+        const myOrder = [t.mySlot, ...others];
+        const foeOrder = [];
+        for (let i = 0; i < roster.size; i++) foeOrder.push(i);
+
+        this.teamLayout = {
+            size: roster.size,
+            allies: myOrder.slice(1).map(slot => (humanAt(t.myTeam, slot) ? 'remote' : 'ai')),
+            foes: foeOrder.slice(1).map(slot => (humanAt(foeTeam, slot) ? 'remote' : 'ai')),
+            foe0: humanAt(foeTeam, foeOrder[0]) ? 'remote' : 'ai'
+        };
+
+        // Only the host drives the computer slots; everyone else replicates them
+        if (!t.isHost) {
+            this.teamLayout.allies = this.teamLayout.allies.map(() => 'remote');
+            this.teamLayout.foes = this.teamLayout.foes.map(() => 'remote');
+            this.teamLayout.foe0 = 'remote';
+        }
+
+        this.startRun();
+
+        // Map every seat to the samurai that represents it on this screen
+        t.carBySlot = new Map();
+        const mine = this.myTeamCars();
+        const foes = this.foeTeamCars();
+        myOrder.forEach((slot, i) => { if (mine[i]) t.carBySlot.set(t.myTeam + slot, mine[i]); });
+        foeOrder.forEach((slot, i) => { if (foes[i]) t.carBySlot.set(foeTeam + slot, foes[i]); });
+        t.aiSeats = [];
+        ['a', 'b'].forEach(team => {
+            for (let slot = 0; slot < roster.size; slot++) {
+                if (!humanAt(team, slot)) t.aiSeats.push(team + slot);
+            }
+        });
+    }
+
+    sendTeamSync() {
+        const t = this.teamNet;
+        if (!t || !t.started || this.gameState !== 'playing') return;
+
+        const packCar = (car) => {
+            const m = this.teamMirror({ x: car.x, y: car.y, vx: car.vx, vy: car.vy });
+            return {
+                x: m.x, y: m.y, vx: m.vx, vy: m.vy,
+                hp: car.hp, maxHp: car.maxHp,
+                energy: car.energy || 0,
+                dead: car.state === 'dead'
+            };
+        };
+
+        this.sendNetworkPacket({ type: 'tsync', id: t.myId, car: packCar(this.player) });
+
+        if (t.isHost) {
+            const ai = (t.aiSeats || []).map(seat => {
+                const car = t.carBySlot.get(seat);
+                return car ? { seat, ...packCar(car) } : null;
+            }).filter(Boolean);
+            this.sendNetworkPacket({
+                type: 'hsync',
+                timer: this.matchTimer,
+                towers: { [t.myTeam]: this.bottomTower.hp, [this.otherTeam()]: this.topTower.hp },
+                maxTower: this.bottomTower.maxHp,
+                ai
+            });
+        }
+    }
+
+    applyTeamCarState(car, data) {
+        if (!car) return;
+        const m = this.teamMirror({ x: data.x, y: data.y, vx: data.vx, vy: data.vy });
+        car.x = m.x;
+        car.y = m.y;
+        car.vx = m.vx;
+        car.vy = m.vy;
+        if (typeof data.maxHp === 'number') car.maxHp = data.maxHp;
+        if (typeof data.energy === 'number') car.energy = data.energy;
+        if (data.dead && car.state !== 'dead') {
+            car.state = 'dead';
+            car.hp = 0;
+            car.respawnTimer = Number.MAX_SAFE_INTEGER; // the owner revives it
+            car.vx = 0;
+            car.vy = 0;
+            this.particles.spawnShockwave(car.x, car.y, car.color, 70);
+        } else if (!data.dead && car.state === 'dead') {
+            car.state = 'idle';
+            car.respawnTimer = 0;
+            this.particles.spawnShockwave(car.x, car.y, car.color, 40);
+        }
+        if (!data.dead) car.hp = data.hp;
+    }
+
+    handleTeamPacket(data) {
+        const t = this.teamNet;
+        if (!t) return;
+
+        if (data.type === 'team_hello') {
+            if (t.started) {
+                // Only the host answers for the room. A player we already
+                // seated is just repeating their hello because our roster did
+                // not reach them, so send it again instead of turning them away.
+                if (!t.isHost) return;
+                if (t.peers.some(p => p.id === data.id)) {
+                    this.sendNetworkPacket({ type: 'team_roster', size: t.size, peers: t.peers });
+                } else {
+                    this.sendNetworkPacket({ type: 'team_busy', to: data.id, room: t.roomIndex || 1 });
+                }
+                return;
+            }
+            if (t.electing) t.seen.add(data.id);
+            else if (t.isHost) this.seatTeamPeer(data.id);
+            return;
+        }
+        if (data.type === 'team_busy') {
+            if (t.started || !t.quick || data.to !== t.myId) return;
+            const next = (t.roomIndex || 1) + 1;
+            if (next > 5) return;
+            this.startTeamQuickMatch(t.size, next);
+            return;
+        }
+        if (data.type === 'team_lobby') {
+            if (!t.started) {
+                t.lobbyCount = data.count;
+                this.updateTeamLobby('Väntar på fler spelare...');
+            }
+            return;
+        }
+        if (data.type === 'team_roster') {
+            if (!t.isHost && !t.started) this.applyTeamRoster(data);
+            return;
+        }
+        if (data.type === 'tsync') {
+            if (data.id === t.myId || this.gameState !== 'playing') return;
+            const seat = t.peers.find(p => p.id === data.id);
+            if (!seat) return;
+            this.applyTeamCarState(t.carBySlot.get(seat.team + seat.slot), data.car);
+            return;
+        }
+        if (data.type === 'hsync') {
+            if (t.isHost || this.gameState !== 'playing') return;
+            if (typeof data.timer === 'number') this.matchTimer = data.timer;
+            if (data.towers) {
+                if (typeof data.towers[t.myTeam] === 'number') this.bottomTower.hp = data.towers[t.myTeam];
+                if (typeof data.towers[this.otherTeam()] === 'number') this.topTower.hp = data.towers[this.otherTeam()];
+            }
+            (data.ai || []).forEach(entry => this.applyTeamCarState(t.carBySlot.get(entry.seat), entry));
+            return;
+        }
+        if (data.type === 'towerhit') {
+            if (!t.isHost || this.gameState !== 'playing') return;
+            const tower = data.team === t.myTeam ? this.bottomTower : this.topTower;
+            tower.hp = Math.max(0, tower.hp - data.amount);
+            this.checkWinCondition();
+            return;
+        }
+        if (data.type === 'tshot') {
+            if (this.gameState !== 'playing') return;
+            const m = this.teamMirror({ x: data.x, y: data.y, vx: data.vx, vy: data.vy });
+            const owner = data.team === t.myTeam ? 'player' : 'enemy';
+            this.spawnProjectile(m.x, m.y, m.vx, m.vy, data.radius, owner, data.cannonType || 'laser', true);
+            return;
+        }
+        if (data.type === 'team_end') {
+            if (this.gameState !== 'playing') return;
+            if (data.winner === t.myTeam) this.handleVictory();
+            else this.handleDefeat();
+            return;
+        }
+        if (data.type === 'restart_request') {
+            this.restartRequestedRemote = true;
+            this.tryMutualRestart();
+        }
+    }
+
+    declareTeamEnd(winnerTeam) {
+        this.sendNetworkPacket({ type: 'team_end', winner: winnerTeam });
+        if (winnerTeam === this.teamNet.myTeam) this.handleVictory();
+        else this.handleDefeat();
+    }
+
+    // ------------------------------------------------------------------
+    // 2 VS 2
+    //
+    // The arena holds up to four samurai: my team at the bottom (me plus
+    // `ally`), the other team at the top (`enemy` plus `enemy2`). Every
+    // extra slot is an Enemy instance that is either computer-driven
+    // (`aiControlled`) or a replica of a networked player (`isRemote`).
+    // Teams are decided by `side`, so the same AI code fights either way.
+    // ------------------------------------------------------------------
+
+    // How much room the arena needs for this line-up. Bigger teams zoom the
+    // camera out instead of cramming eight samurai into a 1v1 sized floor.
+    static get TEAM_WORLD_SCALE() {
+        return { 1: 1, 2: 1, 3: 0.78, 4: 0.62 };
+    }
+
+    // Team colours, so you can always tell your side from theirs
+    static get TEAM_COLORS() {
+        return {
+            bottom: ['#39ff14', '#b6ff00', '#00ffa3'],
+            top: ['#ff9900', '#c04cff', '#ff3b3b']
+        };
+    }
+
+    // layout: { size: 2..4, allies: [...], foes: [...] } with 'ai' | 'remote'
+    setupTeamMatch(layout) {
+        this.teamMatch = true;
+        this.teamRamCooldowns = new Map();
+
+        const size = Math.max(1, Math.min(4, layout.size || 2));
+        this.canvasCtrl.setWorldScale(Game.TEAM_WORLD_SCALE[size] || 1);
+        this.inputCtrl.worldScale = this.canvasCtrl.worldScale;
+
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        // Evenly spaced starting slots along each team's base line
+        const slotX = (i) => (w * (i + 1)) / (size + 1);
+
+        this.player.x = slotX(0);
+        this.player.y = h - 120;
+        this.enemy.x = slotX(0);
+        this.enemy.y = 120;
+        this.enemy.side = 'top';
+        this.enemy.color = '#ff0077';
+        if (layout.foe0) {
+            this.enemy.aiControlled = layout.foe0 === 'ai';
+            this.enemy.isRemote = layout.foe0 === 'remote';
+        } else {
+            this.enemy.aiControlled = !this.isMultiplayer;
+            this.enemy.isRemote = this.isMultiplayer ? true : undefined;
+        }
+
+        const build = (existing, side, i, control) => {
+            const x = slotX(i);
+            const y = side === 'top' ? 120 : h - 120;
+            const car = existing || new Enemy(x, y, this);
+            car.game = this;
+            car.side = side;
+            car.resetForRun(false);
+            car.x = x;
+            car.y = y;
+            car.angle = side === 'top' ? Math.PI / 2 : -Math.PI / 2;
+            car.trailHistory = [];
+            car.aiControlled = control === 'ai';
+            car.isRemote = control === 'remote';
+            car.color = Game.TEAM_COLORS[side][(i - 1) % Game.TEAM_COLORS[side].length];
+            return car;
+        };
+
+        const allyControls = layout.allies || [];
+        const foeControls = layout.foes || [];
+        const nextAllies = [];
+        const nextFoes = [];
+        for (let i = 1; i < size; i++) {
+            nextAllies.push(build(this.allies[i - 1], 'bottom', i, allyControls[i - 1] || 'ai'));
+            nextFoes.push(build(this.foes[i - 1], 'top', i, foeControls[i - 1] || 'ai'));
+        }
+        this.allies = nextAllies;
+        this.foes = nextFoes;
+    }
+
+    clearTeamMatch() {
+        this.teamMatch = false;
+        this.allies = [];
+        this.foes = [];
+        this.teamRamCooldowns = new Map();
+        if (this.canvasCtrl.worldScale !== 1) {
+            this.canvasCtrl.setWorldScale(1);
+            this.inputCtrl.worldScale = 1;
+        }
+    }
+
+    // Every samurai except the two the 1v1 code already owns
+    extraCars() {
+        return [...this.allies, ...this.foes];
+    }
+
+    myTeamCars() {
+        return [this.player, ...this.allies];
+    }
+
+    foeTeamCars() {
+        return [this.enemy, ...this.foes];
+    }
+
+    // Closest living samurai on the other team (the AI needs someone to chase)
+    nearestFoeFor(car) {
+        const foes = (car.side === 'bottom' ? this.foeTeamCars() : this.myTeamCars())
+            .filter(c => c && c.state !== 'dead');
+        if (!foes.length) return car.side === 'bottom' ? this.enemy : this.player;
+        let best = foes[0];
+        let bestDist = Infinity;
+        foes.forEach(c => {
+            const d = Math.hypot(c.x - car.x, c.y - car.y);
+            if (d < bestDist) { bestDist = d; best = c; }
+        });
+        return best;
+    }
+
+    // Same lava rules as the main pair, for the extra samurai
+    applyLavaToCar(car, dt, lavaMinX, lavaMaxX, lavaMinY, lavaMaxY, lavaDamagePerMs) {
+        if (car.x <= lavaMinX || car.x >= lavaMaxX || car.y <= lavaMinY || car.y >= lavaMaxY) return;
+        const h = this.canvasCtrl.height;
+        if (!car.isRemote) car.hp = Math.max(0, car.hp - lavaDamagePerMs * dt);
+        car.vx *= Math.pow(0.95, dt / 16);
+        car.vy *= Math.pow(0.95, dt / 16);
+        car.vy += (car.side === 'bottom' ? 0.004 : -0.004) * dt; // pushed back to its own half
+        const now = Date.now();
+        if (now - (car.lastLavaSizzle || 0) > 160) {
+            car.lastLavaSizzle = now;
+            this.audioSynth.playLavaSizzle();
+            this.particles.spawnLavaSplash(car.x, car.y, car.vx, car.vy);
+            this.particles.addDecal(car.x, car.y > h / 2 ? lavaMaxY : lavaMinY, 16, 'rgba(0,0,0,0.8)', 'scorch');
+        }
+        if (car.hp <= 0) car.takeDamage(1, car.x, car.y, this.particles, this.canvasCtrl);
+    }
+
+    // Returns true when the projectile was consumed by one of the extra samurai
+    teamProjectileHit(p) {
+        const targets = p.owner === 'player' ? this.foeTeamCars() : this.myTeamCars();
+        for (const car of targets) {
+            // the main pair is handled by the original 1v1 code below
+            if (car === this.player || car === this.enemy) continue;
+            if (!car || car.state === 'dead') continue;
+            if (Math.hypot(p.x - car.x, p.y - car.y) >= car.radius + p.radius) continue;
+            this.hitStopTimer = 15;
+            car.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
+            if (p.owner === 'player' && car.side === 'top') {
+                this.addScore(Math.round(p.damageCar || 25), p.x, p.y);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Elastic clash between two samurai, with slash damage to both sides
+    resolveTeamClash(a, b) {
+        if (!a || !b || a.state === 'dead' || b.state === 'dead') return;
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const touchDist = a.radius + b.radius;
+        if (dist >= touchDist || dist === 0) return;
+
+        const angle = Math.atan2(a.y - b.y, a.x - b.x);
+        const overlap = touchDist - dist;
+        a.x += Math.cos(angle) * overlap * 0.5;
+        a.y += Math.sin(angle) * overlap * 0.5;
+        b.x -= Math.cos(angle) * overlap * 0.5;
+        b.y -= Math.sin(angle) * overlap * 0.5;
+
+        const normalX = Math.cos(angle);
+        const normalY = Math.sin(angle);
+        const velAlongNormal = (a.vx - b.vx) * normalX + (a.vy - b.vy) * normalY;
+        if (velAlongNormal < 0) {
+            const preA = Math.hypot(a.vx, a.vy);
+            const preB = Math.hypot(b.vx, b.vy);
+            let impulse = -(1 + 0.85) * velAlongNormal;
+            impulse /= (1 / a.mass) + (1 / b.mass);
+            a.vx += (impulse / a.mass) * normalX;
+            a.vy += (impulse / a.mass) * normalY;
+            b.vx -= (impulse / b.mass) * normalX;
+            b.vy -= (impulse / b.mass) * normalY;
+
+            // Whoever came in fast lands the slash
+            const slashOf = (car) => {
+                const profile = car.profile || this.player.profiles[car.activeWeaponKey] || this.player.profiles.katana;
+                return Math.floor((profile.ramDamage || 100) * 0.5);
+            };
+            if (preA > 0.08) {
+                const dmg = slashOf(a);
+                b.takeDamage(dmg, a.x, a.y, this.particles, this.canvasCtrl);
+                if (a === this.player) this.addScore(dmg * 2, (a.x + b.x) / 2, (a.y + b.y) / 2, 'SLASH!');
+            }
+            if (preB > 0.08) {
+                const dmg = slashOf(b);
+                a.takeDamage(dmg, b.x, b.y, this.particles, this.canvasCtrl);
+                if (b === this.player) this.addScore(dmg * 2, (a.x + b.x) / 2, (a.y + b.y) / 2, 'SLASH!');
+            }
+        }
+
+        this.hitStopTimer = 30;
+        this.audioSynth.playClash();
+        this.canvasCtrl.flash('rgba(255, 255, 255, 0.2)', 100);
+        this.canvasCtrl.addFloorPulse((a.x + b.x) / 2, (a.y + b.y) / 2, '#00f0ff', 160);
+        this.particles.spawnClashSparks((a.x + b.x) / 2, (a.y + b.y) / 2, '#ffffff');
+    }
+
+    // An extra samurai ramming the other team's tower
+    checkTeamTowerRam(car) {
+        if (!car || car.state === 'dead') return;
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        const targetIsTop = car.side === 'bottom';
+        const atTower = targetIsTop ? car.y < 85 : car.y > h - 85;
+        if (!atTower) return;
+        if (car.x + car.radius < w / 2 - 80 || car.x - car.radius > w / 2 + 80) return;
+        if (Math.abs(car.vy) <= 0.05) return;
+
+        const cooldown = this.teamRamCooldowns.get(car) || 0;
+        if (cooldown > Date.now()) return;
+        this.teamRamCooldowns.set(car, Date.now() + 800);
+
+        const profile = car.profile || this.player.profiles[car.activeWeaponKey] || this.player.profiles.katana;
+        const ramDmg = profile.ramDamage || 100;
+        this.damageTower(targetIsTop ? 'top' : 'bottom', ramDmg);
+        const color = targetIsTop ? '#ff0077' : '#00f0ff';
+        this.particles.spawnDamageText(car.x, targetIsTop ? 70 : h - 70, `RAM! -${ramDmg}`, color, 1.3);
+        this.particles.spawnShockwave(car.x, car.y, color, 60);
+        this.canvasCtrl.shake(9, 220);
+        this.audioSynth.playHit();
+        car.vy = -car.vy * 0.8;
+        car.takeDamage(30, car.x, car.y, this.particles, this.canvasCtrl);
+        this.checkWinCondition();
+    }
+
+    checkTeamCollisions(dt) {
+        const mine = this.myTeamCars();
+        const foes = this.foeTeamCars();
+        // Every cross-team pair except player-vs-enemy, which the 1v1 code owns
+        mine.forEach(a => foes.forEach(b => {
+            if (a === this.player && b === this.enemy) return;
+            this.resolveTeamClash(a, b);
+        }));
+        // Team mates bump into each other without drawing blades
+        [mine, foes].forEach(team => {
+            for (let i = 0; i < team.length; i++) {
+                for (let j = i + 1; j < team.length; j++) {
+                    this.resolveTeamBump(team[i], team[j]);
+                }
+            }
+        });
+        this.extraCars().forEach(car => this.checkTeamTowerRam(car));
+    }
+
+    // Friendly collision: push apart, no blades
+    resolveTeamBump(a, b) {
+        if (!a || !b || a.state === 'dead' || b.state === 'dead') return;
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const touchDist = a.radius + b.radius;
+        if (dist >= touchDist || dist === 0) return;
+        const angle = Math.atan2(a.y - b.y, a.x - b.x);
+        const overlap = touchDist - dist;
+        a.x += Math.cos(angle) * overlap * 0.5;
+        a.y += Math.sin(angle) * overlap * 0.5;
+        b.x -= Math.cos(angle) * overlap * 0.5;
+        b.y -= Math.sin(angle) * overlap * 0.5;
+        const normalX = Math.cos(angle);
+        const normalY = Math.sin(angle);
+        const velAlongNormal = (a.vx - b.vx) * normalX + (a.vy - b.vy) * normalY;
+        if (velAlongNormal >= 0) return;
+        let impulse = -(1 + 0.6) * velAlongNormal;
+        impulse /= (1 / a.mass) + (1 / b.mass);
+        a.vx += (impulse / a.mass) * normalX;
+        a.vy += (impulse / a.mass) * normalY;
+        b.vx -= (impulse / b.mass) * normalX;
+        b.vy -= (impulse / b.mass) * normalY;
     }
 
     drawTowers() {

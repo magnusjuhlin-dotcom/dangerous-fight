@@ -83,6 +83,7 @@
             <div class="menu-buttons">
                 <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
                 <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
+                <button id="btn-play-team" class="btn btn-secondary neon-btn-green">LAGMATCH 2v2 - 4v4</button>
                 <button id="btn-scoreboard" class="btn btn-secondary neon-btn-orange">POÄNGTAVLA 🏆</button>
                 <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">SAMURAI-DOJO</button>
                 <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">SVÄRDSVÅG-BUTIK</button>
@@ -91,6 +92,26 @@
             </div>
             
             <div class="high-score-display">HÖGSTA VÅG: <span id="highest-wave-val">1</span></div>
+        </div>
+
+        <!-- TEAM MATCH (2v2 - 4v4) -->
+        <div id="team-screen" class="overlay-screen hidden">
+            <h2>LAGMATCH</h2>
+            <p class="section-desc">Välj hur många ni är i varje lag. Ju större lag, desto större spelplan.</p>
+
+            <div class="team-size-row" id="team-size-row">
+                <button class="btn team-size-btn neon-btn-cyan selected" data-size="2">2 mot 2</button>
+                <button class="btn team-size-btn neon-btn-cyan" data-size="3">3 mot 3</button>
+                <button class="btn team-size-btn neon-btn-cyan" data-size="4">4 mot 4</button>
+            </div>
+
+            <div class="menu-buttons">
+                <button id="btn-team-online" class="btn btn-primary neon-btn-pink">SPELA ONLINE</button>
+                <button id="btn-team-room" class="btn btn-secondary neon-btn-cyan">MED KOMPISAR (KOD)</button>
+                <button id="btn-team-join" class="btn btn-secondary neon-btn-cyan">ANSLUT MED KOD</button>
+                <button id="btn-team-ai" class="btn btn-secondary neon-btn-green">MOT DATORN</button>
+                <button id="btn-team-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+            </div>
         </div>
 
         <!-- QUICK MATCH / MATCHMAKING OVERLAY -->
@@ -127,6 +148,7 @@
                 <div class="room-code-display" id="lobby-code-val">----</div>
             </div>
             <div class="lobby-status">Väntar på att Spelare 2 ansluter...</div>
+            <button id="btn-team-start" class="btn btn-primary neon-btn-green hidden">STARTA MATCHEN</button>
             <button id="btn-lobby-back" class="btn btn-secondary back-btn">AVBRYT</button>
         </div>
 
@@ -525,6 +547,6 @@
         </div>
     </div>
     <!-- Core Game Scripts loaded as ES6 modules -->
-    <script src="src/bundle.js?v=78"></script>
+    <script src="src/bundle.js?v=80"></script>
 </body>
 </html>

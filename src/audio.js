@@ -628,6 +628,7 @@ export class AudioSynth {
         // capitalised word makes the engine read it as a name, one word at a time.
         s = s.replace(/\b[A-ZÅÄÖ][A-ZÅÄÖ]+\b/g, (w) => abbrev[w] || w.toLowerCase());
         // symbols the engine would skip or spell out
+        s = s.replace(/(\d)\s*v\s*(\d)/gi, '$1 mot $2'); // 2v2 -> 2 mot 2
         s = s.replace(/(\d)\s*%/g, '$1 procent');
         s = s.replace(/(\d+)\s*\/\s*(\d+)/g, '$1 av $2');
         s = s.replace(/(\d)\s*[x×]\s*(?=[^ ])/gi, '$1 gånger ');

@@ -1,6 +1,6 @@
 # Dangerous Fight – Slingshot Arena
 
-Ett 1-mot-1 neon-samurajspel för webb och Android. Dra i din samuraj för att dasha, skjut svärdsvågor och riv motståndarens torn innan tiden tar slut – mot datorn eller online.
+Ett neon-samurajspel för webb och Android, 1v1 eller i lag upp till 4 mot 4. Dra i din samuraj för att dasha, skjut svärdsvågor och riv motståndarnas torn innan tiden tar slut – mot datorn eller online.
 
 ---
 
@@ -36,6 +36,12 @@ Spelet körs i **Microsoft Edge på Xbox** (inget att installera):
 ### Spellägen
 - **Spela mot datorn** – välj en tillfällig **Cyber-Perk** före striden. Varannan match är en **Shogun-boss** (större, hårdare, ger mer credits).
 - **Spela online** – du matchas automatiskt mot nästa spelare som söker. Vill du möta en kompis: **Spela med kompis (kod)** → skapa rum och dela den 4-siffriga koden, eller anslut med en kod.
+- **Lagmatch 2v2 – 4v4** – välj lagstorlek först, sedan hur ni spelar:
+  - **Spela online** – du hamnar i det gemensamma rummet för den lagstorleken. Alla som söker samtidigt delas upp i två lag, och tomma platser fylls av datorn efter tio sekunder.
+  - **Med kompisar (kod)** – du skapar ett rum och dina kompisar ansluter med koden. De hamnar i **ditt** lag, så ni kan möta datorn tillsammans. Du startar matchen när ni är klara.
+  - **Mot datorn** – hela laguppställningen styrs av datorn utom du.
+
+  Ju större lag, desto större spelplan: 3v3 och 4v4 zoomar ut arenan (ca 1,3× respektive 1,6× så stor) så alla får plats. Varje lag delar på ett torn, och den som skapade matchen håller matchklockan och båda tornens liv så att skada bara räknas en gång.
 
 ### Butiker (Credits ⚡ tjänas per match)
 - **Samurai-dojo** – välj samuraj: Cyber Ronin (balanserad), Armored Shogun (tung, 150 HP, hårda rammar), Shadow Ninja (snabb, 70 HP).
@@ -114,6 +120,11 @@ android/                    Android-appen (WebView-skal)
 - Torn är rektangulära zoner längst upp/ner. Ett skott gör teknikens `damageTower`, en ram gör samurajens `ramDamage` – en ram per anfall (cooldown), annars skulle bossens ragdoll registrera en ny ram varje bild.
 - Projektiler studsar mot väggar men träffar aldrig den som sköt dem eller skyttens eget torn. Ett parerat skott byter ägare.
 - Lavan är ett band i mitten (±25 px) som drar HP per ms och bromsar. Portarna (x < 80 / x > w−80) blockerar bara fel riktning.
+
+### Lagmatcher (2v2 – 4v4)
+Arenan har upp till fyra platser per lag. Din samuraj är alltid `player`; varje extra plats är en `Enemy` med `side` (`bottom` = ditt lag, `top` = motståndarlaget), som antingen styrs av datorn (`aiControlled`) eller är en kopia av en nätverksspelare (`isRemote`). Samma AI-kod spelar åt båda hållen – `side` avgör var laddzonen ligger, vilket torn den rammar och åt vilket håll den skjuter. Större lag zoomar ut kameran (`canvasCtrl.worldScale`), vilket gör världen större i spelkoordinater utan att fönstret ändras.
+
+Online sitter alla i samma rumskanal. Den som skapade matchen är värd och äger laguppställningen, matchklockan, båda tornen och alla datorstyrda samurajer; varje människa äger sin egen samuraj och rapporterar position och HP. Positionerna skickas i ett delat koordinatsystem (lag A nederst), så ett lag B-ombud speglar dem både när det skickar och tar emot – därför ser båda lagen alltid sig själva nederst. Tornskada som någon annan än värden åstadkommer skickas som `towerhit` och räknas bara av värden, så den aldrig dubbelräknas.
 
 ### Spelaren (`src/player.js`)
 Tre profiler (Ronin / Shogun / Ninja) med radie, massa, bas-HP, ramskada och fartfaktor. Släppt drag ger hastigheten `−drag · 0,12 · fartfaktor`. Energi laddas när man står stilla i nedre zonen (1,5 s per laddning, snabbare med Snabbladdning). `shoot()` avfyrar alla aktiva tekniker (max 2) från samurajens position. Död → 3 s respawn vid tornet.

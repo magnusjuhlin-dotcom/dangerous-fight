@@ -1567,3 +1567,26 @@ h2 {
     opacity: 1;
     transform: translate(-50%, 0);
 }
+
+
+/* --- Team match (2v2 - 4v4) --- */
+.team-size-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 6px 0 14px;
+}
+
+.team-size-btn {
+    flex: 0 0 auto;
+    min-width: 104px;
+    padding: 10px 14px;
+    opacity: 0.55;
+}
+
+.team-size-btn.selected {
+    opacity: 1;
+    box-shadow: 0 0 18px rgba(0, 240, 255, 0.65);
+    transform: translateY(-2px);
+}

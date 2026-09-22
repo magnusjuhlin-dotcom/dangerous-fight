@@ -8,6 +8,9 @@ export class CanvasController {
         // Logical bounds for positioning elements independently of display resolution
         this.width = 800;
         this.height = 600;
+        // Zooming out makes the arena bigger in world units without changing
+        // the window: 1 = normal, 0.75 = a third more room (3v3, 4v4).
+        this.worldScale = 1;
         
         // Screen Shake variables
         this.shakeTime = 0;
@@ -44,23 +47,31 @@ export class CanvasController {
     }
 
     // Adapt canvas resolution to screen size and high pixel density (Retina/OLED)
+    // Bigger team = bigger arena. Redraws the floor at the new size.
+    setWorldScale(scale) {
+        const next = Math.max(0.5, Math.min(1, scale));
+        if (Math.abs(next - this.worldScale) < 0.001) return;
+        this.worldScale = next;
+        this.resize();
+    }
+
     resize() {
         const rect = this.canvas.parentElement.getBoundingClientRect();
         
         // Base resolution scaling factor (maintain aspect ratio 4:3 internally)
-        this.width = rect.width;
-        this.height = rect.height;
+        this.width = rect.width / this.worldScale;
+        this.height = rect.height / this.worldScale;
         
         const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = this.width * dpr;
-        this.canvas.height = this.height * dpr;
-        
-        // Scale the canvas rendering context by devicePixelRatio
-        this.ctx.scale(dpr, dpr);
+        this.canvas.width = rect.width * dpr;
+        this.canvas.height = rect.height * dpr;
+
+        // World units -> device pixels (setting canvas.width reset the matrix)
+        this.ctx.scale(dpr * this.worldScale, dpr * this.worldScale);
         
         // Match CSS display size
-        this.canvas.style.width = `${this.width}px`;
-        this.canvas.style.height = `${this.height}px`;
+        this.canvas.style.width = `${this.width * this.worldScale}px`;
+        this.canvas.style.height = `${this.height * this.worldScale}px`;
     }
 
     // Trigger screen-shake effect

@@ -24,9 +24,11 @@ export class InputController {
         // Helper to translate client coordinates to relative canvas coordinates
         const getCoords = (clientX, clientY) => {
             const rect = this.canvas.getBoundingClientRect();
+            // Screen pixels -> world units (the arena zooms out in 3v3 / 4v4)
+            const scale = this.worldScale || 1;
             return {
-                x: clientX - rect.left,
-                y: clientY - rect.top
+                x: (clientX - rect.left) / scale,
+                y: (clientY - rect.top) / scale
             };
         };
 

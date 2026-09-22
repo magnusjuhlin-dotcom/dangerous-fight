@@ -33,6 +33,14 @@ export class Enemy {
         // AI behavior state machine
         this.aiState = 'idle'; // 'idle', 'recharging', 'aiming_ram', 'cooldown'
         this.aiTimer = 1000; // time until next AI action
+
+        // Team layout (2v2): 'top' fights downwards, 'bottom' fights upwards.
+        // A 'bottom' samurai is on the player's team, so its shots count as
+        // player-owned and it charges in the lower zone.
+        this.side = 'top';
+        // null = legacy behaviour (AI in single player only). Set explicitly in
+        // 2v2, where the host also drives the computer-controlled slots.
+        this.aiControlled = null;
         
         // Profiles for multiplayer vehicle matching (Scaled up by ~75%)
         this.profiles = {
@@ -121,9 +129,12 @@ export class Enemy {
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
 
-        // Multiplayer: this object is a replica of the opponent, who owns
-        // their own hp/death and reports it via 'sync'. Only show the hit.
-        if (this.game && this.game.isMultiplayer) {
+        // A replica belongs to another machine, which owns its hp/death and
+        // reports it via 'sync'. Only show the hit here. `isRemote` is set per
+        // samurai in 2v2 (a computer slot driven by the host is NOT a replica);
+        // undefined keeps the 1v1 rule that any opponent online is a replica.
+        const isReplica = this.isRemote === undefined ? (this.game && this.game.isMultiplayer) : this.isRemote;
+        if (this.game && isReplica) {
             particleSystem.spawnDamageText(this.x, this.y, `-${Math.round(amount)}`, '#00f0ff', 1.1);
             particleSystem.spawnClashSparks(this.x, this.y, this.color);
             particleSystem.spawnDigitalBleed(this.x, this.y, this.color);
@@ -232,7 +243,7 @@ export class Enemy {
                 this.state = 'idle';
                 this.hp = this.maxHp;
                 this.x = width / 2;
-                this.y = 120;
+                this.y = this.side === 'top' ? 120 : height - 120;
                 this.vx = 0;
                 this.vy = 0;
                 if (this.isBoss) {
@@ -396,15 +407,18 @@ export class Enemy {
             }
         }
 
-        // --- SINGLE PLAYER AI CONTROLLER ---
-        if (!this.game.isMultiplayer) {
+        // --- AI CONTROLLER ---
+        const runAI = this.aiControlled === null ? !this.game.isMultiplayer : this.aiControlled;
+        if (runAI) {
             this.updateAI(deltaTime, player, particleSystem, width, height);
         }
     }
 
     updateAI(deltaTime, player, particleSystem, width, height) {
-        // AI charging zone is at the top (y < 150)
-        const inChargingZone = this.y < 150;
+        // The charging zone is on this samurai's own half of the arena
+        const towardsFoe = this.side === 'top' ? 1 : -1;      // +1 = downwards
+        const myOwner = this.side === 'top' ? 'enemy' : 'player';
+        const inChargingZone = this.side === 'top' ? this.y < 150 : this.y > height - 150;
         const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
 
         // 1. Charge energy in zone
@@ -434,7 +448,7 @@ export class Enemy {
             if (this.energy === 0 && !inChargingZone) {
                 // Head back to charge zone
                 const targetX = width / 2 + (Math.random() - 0.5) * 60;
-                const targetY = 100;
+                const targetY = this.side === 'top' ? 100 : height - 100;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 this.vx = Math.cos(angle) * 0.8;
                 this.vy = Math.sin(angle) * 0.8;
@@ -451,23 +465,23 @@ export class Enemy {
                     const speed = 0.50; // faster lasers for boss
                     
                     const dxLeft = player.x - leftHand.x;
-                    this.game.spawnProjectile(leftHand.x, leftHand.y, dxLeft * 0.0015, speed, 8, 'enemy');
-                    
+                    this.game.spawnProjectile(leftHand.x, leftHand.y, dxLeft * 0.0015, speed * towardsFoe, 8, myOwner);
+
                     const dxRight = player.x - rightHand.x;
-                    this.game.spawnProjectile(rightHand.x, rightHand.y, dxRight * 0.0015, speed, 8, 'enemy');
+                    this.game.spawnProjectile(rightHand.x, rightHand.y, dxRight * 0.0015, speed * towardsFoe, 8, myOwner);
                 } else {
                     // Fire from where the samurai actually is, aimed at the player
                     const startX = this.x;
                     const startY = this.y;
                     const dx = player.x - startX;
                     const speed = 0.45;
-                    this.game.spawnProjectile(startX, startY, dx * 0.0015, speed, 8, 'enemy');
-                    this.vy -= 0.045 / this.mass; // recoil, like the player
+                    this.game.spawnProjectile(startX, startY, dx * 0.0015, speed * towardsFoe, 8, myOwner);
+                    this.vy -= (0.045 * towardsFoe) / this.mass; // recoil, like the player
                 }
             } else {
                 // Ram/dash towards player or player tower
                 const targetX = Math.random() < 0.65 ? player.x : (width / 2 + (Math.random() - 0.5) * 100);
-                const targetY = height - 90;
+                const targetY = this.side === 'top' ? height - 90 : 90;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 
                 const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;

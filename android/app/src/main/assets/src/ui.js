@@ -6,6 +6,7 @@ export class UIController {
             menu: document.getElementById('main-menu'),
             multiplayer: document.getElementById('multiplayer-menu'),
             matchmaking: document.getElementById('matchmaking-screen'),
+            team: document.getElementById('team-screen'),
             lobby: document.getElementById('lobby-screen'),
             join: document.getElementById('join-room-screen'),
             weapons: document.getElementById('weapons-menu'), // Garage
@@ -63,7 +64,7 @@ export class UIController {
     }
 
     // Refresh HUD bars, timer, and statuses
-    updateHUD(player, enemy, isMultiplayer, isClient, matchTimerMs = 240000, currentScore = 0, matchKills = 0) {
+    updateHUD(player, enemy, isMultiplayer, isClient, matchTimerMs = 240000, currentScore = 0, matchKills = 0, game = null) {
         // Live Score and Kills in HUD
         if (this.hudScoreVal) {
             this.hudScoreVal.innerText = Math.round(currentScore).toLocaleString('sv-SE');
@@ -125,9 +126,18 @@ export class UIController {
         this.bottomTowerHpBar.style.width = `${localTowerPercent}%`;
         this.topTowerHpBar.style.width = `${remoteTowerPercent}%`;
 
-        // Apply car HP text
-        this.playerCarHpText.innerText = Math.max(0, Math.ceil(localCarHp));
-        this.enemyCarHpText.innerText = Math.max(0, Math.ceil(remoteCarHp));
+        // Apply car HP text. In 2v2 both samurai of a team share one readout:
+        // "mine + team mate's" on the bottom, both opponents on the top.
+        const hpOf = (car) => (car && car.state !== 'dead' ? Math.max(0, Math.ceil(car.hp)) : 0);
+        if (game && game.teamMatch) {
+            this.playerCarHpText.innerText = game.myTeamCars().map(hpOf).join(' + ');
+            this.enemyCarHpText.innerText = game.foeTeamCars().map(hpOf).join(' + ');
+            if (this.bottomTowerLabel) this.bottomTowerLabel.innerText = 'ERT TORN';
+            if (this.topTowerLabel) this.topTowerLabel.innerText = 'DERAS TORN';
+        } else {
+            this.playerCarHpText.innerText = Math.max(0, Math.ceil(localCarHp));
+            this.enemyCarHpText.innerText = Math.max(0, Math.ceil(remoteCarHp));
+        }
 
         // Update charge indicator lights (max 3)
         if (this.playerCarCharge) {
