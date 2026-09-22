@@ -43,6 +43,8 @@ Spelet körs i **Microsoft Edge på Xbox** (inget att installera):
 
   Ju större lag, desto större spelplan: 3v3 och 4v4 zoomar ut arenan (ca 1,3× respektive 1,6× så stor) så alla får plats. Varje lag delar på ett torn, och den som skapade matchen håller matchklockan och båda tornens liv så att skada bara räknas en gång.
 
+  **Lagfärger:** det ena laget är grönt, det andra rött. När matchen börjar står det **DU ÄR GRÖN** eller **DU ÄR RÖD** på skärmen, och HUD:en visar vilket lag tornen tillhör. Färgen hör till laget och inte till skärmhalvan, så alla i matchen menar samma sak med "de gröna" – även om var och en ser sitt eget lag nederst.
+
 ### Butiker (Credits ⚡ tjänas per match)
 - **Samurai-dojo** – välj samuraj: Cyber Ronin (balanserad), Armored Shogun (tung, 150 HP, hårda rammar), Shadow Ninja (snabb, 70 HP).
 - **Svärdsvåg-butik** – köp tekniker (plasma, dubbel, trio, hagel, sniper, bakåt). **Max 2 aktiva samtidigt**, båda avfyras vid varje skott.

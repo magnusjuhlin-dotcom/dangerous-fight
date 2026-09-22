@@ -1230,9 +1230,10 @@ class Game {
             this.netSyncAccumulator = 0;
         }
         
-        // 2v2: fill the two extra slots (computer or networked player)
+        // 2v2 - 4v4: fill the extra slots (computer or networked player)
         if (this.teamLayout) {
             this.setupTeamMatch(this.teamLayout);
+            this.showTeamBanner();
         } else {
             this.clearTeamMatch();
         }
@@ -1266,6 +1267,22 @@ class Game {
             this.audioSynth.playVoiceIntro(false);
             this.audioSynth.startMusic();
         }
+    }
+
+    // "DU ÄR GRÖN" at the start of a team match, so nobody has to guess
+    showTeamBanner() {
+        const banner = document.getElementById('boss-warning');
+        if (!banner || !this.myTeamColor) return;
+        const me = Game.TEAM_NAMES[this.myTeamColor];
+        const them = Game.TEAM_NAMES[this.foeTeamColor];
+        banner.innerText = `DU ÄR ${this.myTeamColor === 'green' ? 'GRÖN' : 'RÖD'} – DU SPELAR I ${me} LAGET MOT DET ${them}`;
+        banner.style.color = Game.TEAM_PALETTES[this.myTeamColor][0];
+        banner.classList.remove('hidden');
+        if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
+        this.bossWarningTimeout = setTimeout(() => {
+            banner.classList.add('hidden');
+            banner.style.color = '';
+        }, 4000);
     }
 
     showBossWarningBanner(isBoss) {
@@ -2907,18 +2924,30 @@ class Game {
         return { 1: 1, 2: 1, 3: 0.78, 4: 0.62 };
     }
 
-    // Team colours, so you can always tell your side from theirs
-    static get TEAM_COLORS() {
+    // Two teams, two colours. The colour belongs to the TEAM, not to the
+    // half of the screen you are on - so if you are told you are green,
+    // everyone in the match agrees that the green samurai are your side.
+    static get TEAM_PALETTES() {
         return {
-            bottom: ['#39ff14', '#b6ff00', '#00ffa3'],
-            top: ['#ff9900', '#c04cff', '#ff3b3b']
+            green: ['#39ff14', '#00ffa3', '#b6ff00', '#00c853'],
+            red: ['#ff0033', '#ff4d00', '#ff2d78', '#c62828']
         };
+    }
+
+    static get TEAM_NAMES() {
+        return { green: 'GRÖNA', red: 'RÖDA' };
     }
 
     // layout: { size: 2..4, allies: [...], foes: [...] } with 'ai' | 'remote'
     setupTeamMatch(layout) {
         this.teamMatch = true;
         this.teamRamCooldowns = new Map();
+
+        // Team A is green, team B is red. Offline you are always green.
+        this.myTeamColor = this.teamNet && this.teamNet.myTeam === 'b' ? 'red' : 'green';
+        this.foeTeamColor = this.myTeamColor === 'green' ? 'red' : 'green';
+        const myPalette = Game.TEAM_PALETTES[this.myTeamColor];
+        const foePalette = Game.TEAM_PALETTES[this.foeTeamColor];
 
         const size = Math.max(1, Math.min(4, layout.size || 2));
         this.canvasCtrl.setWorldScale(Game.TEAM_WORLD_SCALE[size] || 1);
@@ -2934,7 +2963,8 @@ class Game {
         this.enemy.x = slotX(0);
         this.enemy.y = 120;
         this.enemy.side = 'top';
-        this.enemy.color = '#ff0077';
+        this.player.teamColor = myPalette[0];
+        this.enemy.color = foePalette[0];
         if (layout.foe0) {
             this.enemy.aiControlled = layout.foe0 === 'ai';
             this.enemy.isRemote = layout.foe0 === 'remote';
@@ -2956,7 +2986,8 @@ class Game {
             car.trailHistory = [];
             car.aiControlled = control === 'ai';
             car.isRemote = control === 'remote';
-            car.color = Game.TEAM_COLORS[side][(i - 1) % Game.TEAM_COLORS[side].length];
+            const palette = side === 'bottom' ? myPalette : foePalette;
+            car.color = palette[i % palette.length];
             return car;
         };
 
@@ -2974,6 +3005,9 @@ class Game {
 
     clearTeamMatch() {
         this.teamMatch = false;
+        this.player.teamColor = null;
+        this.myTeamColor = null;
+        this.foeTeamColor = null;
         this.allies = [];
         this.foes = [];
         this.teamRamCooldowns = new Map();

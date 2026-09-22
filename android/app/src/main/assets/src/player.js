@@ -79,7 +79,9 @@ export class Player {
     }
 
     get radius() { return this.profile.radius; }
-    get color() { return this.profile.color; }
+    // In a team match the team colour wins over the vehicle colour, so you
+    // can always tell at a glance who is on your side.
+    get color() { return this.teamColor || this.profile.color; }
     get mass() { return this.profile.mass; }
 
     applyPermanentUpgrades(levels) {

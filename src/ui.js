@@ -130,10 +130,12 @@ export class UIController {
         // "mine + team mate's" on the bottom, both opponents on the top.
         const hpOf = (car) => (car && car.state !== 'dead' ? Math.max(0, Math.ceil(car.hp)) : 0);
         if (game && game.teamMatch) {
+            const myName = game.myTeamColor === 'red' ? 'RÖDA' : 'GRÖNA';
+            const foeName = game.myTeamColor === 'red' ? 'GRÖNA' : 'RÖDA';
             this.playerCarHpText.innerText = game.myTeamCars().map(hpOf).join(' + ');
             this.enemyCarHpText.innerText = game.foeTeamCars().map(hpOf).join(' + ');
-            if (this.bottomTowerLabel) this.bottomTowerLabel.innerText = 'ERT TORN';
-            if (this.topTowerLabel) this.topTowerLabel.innerText = 'DERAS TORN';
+            if (this.bottomTowerLabel) this.bottomTowerLabel.innerText = `DITT TORN (${myName} LAGET)`;
+            if (this.topTowerLabel) this.topTowerLabel.innerText = `${foeName} LAGETS TORN`;
         } else {
             this.playerCarHpText.innerText = Math.max(0, Math.ceil(localCarHp));
             this.enemyCarHpText.innerText = Math.max(0, Math.ceil(remoteCarHp));
