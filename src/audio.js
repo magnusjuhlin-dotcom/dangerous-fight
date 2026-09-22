@@ -600,7 +600,9 @@ export class AudioSynth {
                 // Deep bass narrator voice, like the intro
                 // A real male voice at a natural-but-deep pitch sounds human;
                 // extreme pitch shifting just sounds robotic
-                window.AndroidTTS.speakText(clean, 'sv-SE', 0.72, 0.9);
+                // The native side picks a real (neural, male) voice and nudges the
+                // pitch back up when it is a neural one - see MainActivity.applyVoice
+                window.AndroidTTS.speakText(clean, 'sv-SE', 0.7, 0.95);
             } catch (e) {
                 if (onEnd) onEnd();
                 return false;

@@ -20,7 +20,13 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    private var ttsReady = false
+    private var lastVoiceWasNeural = false
+    private var forceLocalVoice = false
+    private var lastSpokenText: String? = null
+    private var lastLocale: Locale = Locale.US
+    private var lastPitch = 1.0f
+    private var lastRate = 1.0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,7 +87,45 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (status == TextToSpeech.SUCCESS) {
             // The engine itself is up; language/pitch/rate are set per utterance
             ttsReady = true
+            tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) {}
+                @Deprecated("deprecated in API 21")
+                override fun onError(utteranceId: String?) = onError(utteranceId, -1)
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    // A neural voice needs the network: retry the same line with the
+                    // offline voice instead of leaving the player in silence.
+                    val text = lastSpokenText ?: return
+                    if (!lastVoiceWasNeural) return
+                    forceLocalVoice = true
+                    android.os.Handler(mainLooper).post {
+                        applyVoice(lastLocale, lastPitch, lastRate)
+                        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId ?: "Retry")
+                    }
+                }
+            })
         }
+    }
+
+    // Google's voice ids end in -local or -network; the network ones are the
+    // neural models and sound markedly more human. Male Swedish voices carry
+    // the -cmh/-iom/-iol/-tpd/-gbd suffixes, female ones -lfs/-tpf/-sfg/-iob.
+    private val maleHints = listOf("cmh", "iom", "iol", "tpd", "gbd", "male", "-m-")
+    private val femaleHints = listOf("lfs", "tpf", "sfg", "iob", "female", "-f-")
+
+    private fun pickVoice(lang: String): android.speech.tts.Voice? {
+        val engine = tts ?: return null
+        val all = engine.voices?.filter { it.locale.language == lang } ?: return null
+        fun isMale(v: android.speech.tts.Voice) = maleHints.any { v.name.lowercase().contains(it) }
+        fun isFemale(v: android.speech.tts.Voice) = femaleHints.any { v.name.lowercase().contains(it) }
+        // Score: male first, then neural (network) models, then engine quality
+        val usable = if (forceLocalVoice) all.filterNot { it.isNetworkConnectionRequired } else all
+        val ranked = usable.filterNot { isFemale(it) }.sortedWith(
+            compareByDescending<android.speech.tts.Voice> { if (isMale(it)) 1 else 0 }
+                .thenByDescending { if (!forceLocalVoice && it.isNetworkConnectionRequired) 1 else 0 }
+                .thenByDescending { it.quality }
+        )
+        return ranked.firstOrNull { isMale(it) } ?: ranked.firstOrNull()
     }
 
     private fun applyVoice(locale: Locale, pitch: Float, rate: Float) {
@@ -91,23 +135,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             // Fall back to the device default rather than staying silent
             engine.setLanguage(Locale.getDefault())
         }
-        // Prefer an installed male voice for the language: a real male voice at a
-        // natural pitch sounds human, a pitched-down female voice sounds robotic.
         try {
             val lang = engine.voice?.locale?.language ?: locale.language
-            val maleHints = listOf("cmh", "iom", "iol", "tpd", "gbd", "male", "-m-")
-            val femaleHints = listOf("lfs", "tpf", "sfg", "iob", "female", "-f-")
-            val candidates = engine.voices
-                ?.filter { it.locale.language == lang && !it.isNetworkConnectionRequired }
-                ?.filter { v -> femaleHints.none { v.name.lowercase().contains(it) } }
-                ?.sortedWith(compareByDescending<android.speech.tts.Voice> { v -> maleHints.any { v.name.lowercase().contains(it) } }
-                    .thenByDescending { it.quality })
-            val pick = candidates?.firstOrNull { v -> maleHints.any { v.name.lowercase().contains(it) } }
-            if (pick != null) engine.voice = pick
+            val pick = pickVoice(lang)
+            lastVoiceWasNeural = false
+            if (pick != null) {
+                engine.voice = pick
+                // A neural voice is already a real male timbre, so it only needs a
+                // nudge downwards; heavy pitch shifting is what sounds robotic.
+                lastVoiceWasNeural = pick.isNetworkConnectionRequired
+            }
         } catch (e: Exception) {
             // voice listing is best effort; language + pitch still apply
         }
-        engine.setPitch(pitch)
+        engine.setPitch(if (lastVoiceWasNeural) (pitch + 0.15f).coerceAtMost(1.0f) else pitch)
         engine.setSpeechRate(rate)
     }
 
@@ -116,6 +157,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         @JavascriptInterface
         fun speak(text: String) {
             if (ttsReady && tts != null) {
+                lastSpokenText = text; lastLocale = Locale.US; lastPitch = 0.48f; lastRate = 0.80f
                 applyVoice(Locale.US, 0.48f, 0.80f)
                 tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "IntroTTS")
             }
@@ -125,7 +167,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         @JavascriptInterface
         fun speakText(text: String, lang: String, pitch: Float, rate: Float) {
             if (ttsReady && tts != null) {
-                applyVoice(Locale.forLanguageTag(lang), pitch, rate)
+                val loc = Locale.forLanguageTag(lang)
+                lastSpokenText = text; lastLocale = loc; lastPitch = pitch; lastRate = rate
+                applyVoice(loc, pitch, rate)
                 tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ReadAloud")
             }
         }
@@ -138,6 +182,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         @JavascriptInterface
         fun isSpeaking(): Boolean {
             return tts?.isSpeaking ?: false
+        }
+
+        // Diagnostics: which voices the device actually offers, and which one is active
+        @JavascriptInterface
+        fun listVoices(lang: String): String {
+            val engine = tts ?: return "[]"
+            val all = engine.voices?.filter { it.locale.language == lang } ?: emptyList()
+            val current = engine.voice?.name ?: "-"
+            return all.joinToString(",", prefix = "current=$current|") {
+                it.name + ":q" + it.quality + (if (it.isNetworkConnectionRequired) ":net" else ":local")
+            }
         }
     }
 
