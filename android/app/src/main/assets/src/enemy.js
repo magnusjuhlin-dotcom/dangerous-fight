@@ -9,7 +9,7 @@ export class Enemy {
         this.y = y;
         this.vx = 0;
         this.vy = 0;
-        this.friction = 0.985;
+        this.friction = 0.992;
         this.radius = 34;
         this.mass = 1.0;
         this.color = "#ff0077"; // Neon Pink
@@ -436,8 +436,8 @@ export class Enemy {
                 const targetX = width / 2 + (Math.random() - 0.5) * 60;
                 const targetY = 100;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
-                this.vx = Math.cos(angle) * 0.45;
-                this.vy = Math.sin(angle) * 0.45;
+                this.vx = Math.cos(angle) * 0.8;
+                this.vy = Math.sin(angle) * 0.8;
                 this.game.audioSynth.playSlash('katana');
             } else if (this.energy > 0 && Math.random() < 0.6) {
                 // Shoot a projectile
@@ -471,7 +471,7 @@ export class Enemy {
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 
                 const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;
-                const launchForce = (0.5 + Math.random() * 0.25) * launchForceMultiplier;
+                const launchForce = (0.95 + Math.random() * 0.45) * launchForceMultiplier;
                 this.vx = Math.cos(angle) * launchForce;
                 this.vy = Math.sin(angle) * launchForce;
                 this.game.audioSynth.playSlash('katana');

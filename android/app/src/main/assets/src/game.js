@@ -363,8 +363,8 @@ class Game {
         // Keyboard Arrow/WASD fallback
         this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
             if (this.gameState !== 'playing' || this.player.state === 'dead') return;
-            this.player.vx = dirX * 0.9 * this.player.profile.speedMultiplier;
-            this.player.vy = dirY * 0.9 * this.player.profile.speedMultiplier;
+            this.player.vx = dirX * 1.7 * this.player.profile.speedMultiplier;
+            this.player.vy = dirY * 1.7 * this.player.profile.speedMultiplier;
             this.audioSynth.playSlash(this.player.activeWeaponKey);
         };
     }

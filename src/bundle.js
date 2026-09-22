@@ -3495,7 +3495,7 @@ class Player {
         this.y = y;
         this.vx = 0;
         this.vy = 0;
-        this.friction = 0.99;   // glides further before the dash dies out
+        this.friction = 0.993;  // keeps the speed up far longer across the arena
         this.isAiming = false;
         this.aimDx = 0;
         this.aimDy = 0;
@@ -3643,7 +3643,7 @@ class Player {
             // Full 120 px pull = ~1.1 px/ms, roughly twice the AI's dash speed, so the
             // samurai crosses the arena in well under a second. (0.12 was the old value
             // and gave 10+ px/ms, which shot it across in a few frames like a pinball.)
-            const launchScale = 0.0092 * this.profile.speedMultiplier;
+            const launchScale = 0.017 * this.profile.speedMultiplier;
             this.vx = -this.aimDx * launchScale;
             this.vy = -this.aimDy * launchScale;
             
@@ -3807,7 +3807,7 @@ class Player {
                 particleSystem.addDecal(this.x, this.y, 6, 'rgba(0,0,0,0.5)', 'skid', this.angle);
             }
 
-            const currentFriction = this.activeWeaponKey === 'hammer' ? 0.99 : this.friction;
+            const currentFriction = this.activeWeaponKey === 'hammer' ? 0.995 : this.friction;
             this.vx *= Math.pow(currentFriction, deltaTime / 16);
             this.vy *= Math.pow(currentFriction, deltaTime / 16);
             
@@ -3959,7 +3959,7 @@ class Enemy {
         this.y = y;
         this.vx = 0;
         this.vy = 0;
-        this.friction = 0.985;
+        this.friction = 0.992;
         this.radius = 34;
         this.mass = 1.0;
         this.color = "#ff0077"; // Neon Pink
@@ -4386,8 +4386,8 @@ class Enemy {
                 const targetX = width / 2 + (Math.random() - 0.5) * 60;
                 const targetY = 100;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
-                this.vx = Math.cos(angle) * 0.45;
-                this.vy = Math.sin(angle) * 0.45;
+                this.vx = Math.cos(angle) * 0.8;
+                this.vy = Math.sin(angle) * 0.8;
                 this.game.audioSynth.playSlash('katana');
             } else if (this.energy > 0 && Math.random() < 0.6) {
                 // Shoot a projectile
@@ -4421,7 +4421,7 @@ class Enemy {
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 
                 const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;
-                const launchForce = (0.5 + Math.random() * 0.25) * launchForceMultiplier;
+                const launchForce = (0.95 + Math.random() * 0.45) * launchForceMultiplier;
                 this.vx = Math.cos(angle) * launchForce;
                 this.vy = Math.sin(angle) * launchForce;
                 this.game.audioSynth.playSlash('katana');
@@ -4826,8 +4826,8 @@ class Game {
         // Keyboard Arrow/WASD fallback
         this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
             if (this.gameState !== 'playing' || this.player.state === 'dead') return;
-            this.player.vx = dirX * 0.9 * this.player.profile.speedMultiplier;
-            this.player.vy = dirY * 0.9 * this.player.profile.speedMultiplier;
+            this.player.vx = dirX * 1.7 * this.player.profile.speedMultiplier;
+            this.player.vy = dirY * 1.7 * this.player.profile.speedMultiplier;
             this.audioSynth.playSlash(this.player.activeWeaponKey);
         };
     }
