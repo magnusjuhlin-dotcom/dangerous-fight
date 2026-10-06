@@ -11,6 +11,13 @@ export class UIController {
             join: document.getElementById('join-room-screen'),
             weapons: document.getElementById('weapons-menu'), // Garage
             cannons: document.getElementById('cannons-menu'),
+            coinshop: document.getElementById('coin-shop-screen'),
+            helpershop: document.getElementById('helper-shop-screen'),
+            cheatshop: document.getElementById('cheat-shop-screen'),
+            reinforce: document.getElementById('reinforce-screen'),
+            missions: document.getElementById('missions-screen'),
+            settings: document.getElementById('settings-screen'),
+            pause: document.getElementById('pause-screen'),
             upgrades: document.getElementById('upgrades-menu'),
             scoreboard: document.getElementById('scoreboard-screen'),
             howto: document.getElementById('howto-screen'),
@@ -49,6 +56,47 @@ export class UIController {
         this.statVictoryScore = document.getElementById('stat-victory-score');
         this.statVictoryKills = document.getElementById('stat-victory-kills');
         this.statVictoryHighscoreBadge = document.getElementById('stat-victory-highscore-badge');
+
+        // The phone's back button (MainActivity asks this first; false = leave the app)
+        window.onAndroidBack = () => {
+            try { return this.handleBack(); } catch (e) { return false; }
+        };
+    }
+
+    // Back: close a popup, skip the trailer, pause a match, or press the
+    // screen's own back button. Only the main menu lets the app go.
+    handleBack() {
+        const game = window.game;
+        const visible = (el) => el && !el.classList.contains('hidden');
+        const popup = ['daily-gift', 'stage-up', 'level-up'].map((id) => document.getElementById(id)).find(visible);
+        const langBox = document.getElementById('lang-box');
+        if (visible(langBox)) {
+            if (!window.i18n || !window.i18n.chosen) return false; // a language has to be picked
+            langBox.classList.add('hidden');
+            return true;
+        }
+        if (popup) {
+            const btn = popup.querySelector('button');
+            if (btn) btn.click();
+            return true;
+        }
+        if (game && game.trailer && game.trailer.active) {
+            game.trailer.stop();
+            return true;
+        }
+        if (game && game.gameState === 'playing' && visible(this.screens.hud)) {
+            game.pauseMatch(); // (online, or during the finisher, there is no pause: stay in the match)
+            return true;
+        }
+        const screen = [...document.querySelectorAll('.overlay-screen')].find((el) => el.id !== 'lang-box' && visible(el));
+        if (!screen || screen.id === 'main-menu') return false;
+        const byId = { 'pause-screen': 'btn-resume', 'game-over-screen': 'btn-gameover-menu', 'victory-screen': 'btn-victory-menu' };
+        const btn = byId[screen.id] ? document.getElementById(byId[screen.id]) : screen.querySelector('.back-btn');
+        if (btn && !btn.disabled) {
+            btn.click();
+            return true;
+        }
+        return false;
     }
 
     // Single point to hide everything and display one specific screen
@@ -116,8 +164,10 @@ export class UIController {
             remoteCarHp = enemy ? enemy.hp : 100;
             localCarEnergy = player.energy;
             
-            this.bottomTowerLabel.innerText = "DITT TORN";
-            this.topTowerLabel.innerText = "DATORNS TORN";
+            // (2 players on one phone: a tower each)
+            const local2p = game && game.local2p;
+            this.bottomTowerLabel.innerText = local2p ? "SPELARE 1:S TORN" : "DITT TORN";
+            this.topTowerLabel.innerText = local2p ? "SPELARE 2:S TORN" : "DATORNS TORN";
         }
 
         // Apply tower percentages
@@ -130,12 +180,15 @@ export class UIController {
         // "mine + team mate's" on the bottom, both opponents on the top.
         const hpOf = (car) => (car && car.state !== 'dead' ? Math.max(0, Math.ceil(car.hp)) : 0);
         if (game && game.teamMatch) {
-            const myName = game.myTeamColor === 'red' ? 'RÖDA' : 'GRÖNA';
-            const foeName = game.myTeamColor === 'red' ? 'GRÖNA' : 'RÖDA';
             this.playerCarHpText.innerText = game.myTeamCars().map(hpOf).join(' + ');
             this.enemyCarHpText.innerText = game.foeTeamCars().map(hpOf).join(' + ');
-            if (this.bottomTowerLabel) this.bottomTowerLabel.innerText = `DITT TORN (${myName} LAGET)`;
-            if (this.topTowerLabel) this.topTowerLabel.innerText = `${foeName} LAGETS TORN`;
+            // (a 1v1 that got a reinforcement is a team match without team colours)
+            if (game.myTeamColor) {
+                const myName = game.myTeamColor === 'red' ? 'RÖDA' : 'GRÖNA';
+                const foeName = game.myTeamColor === 'red' ? 'GRÖNA' : 'RÖDA';
+                if (this.bottomTowerLabel) this.bottomTowerLabel.innerText = `DITT TORN (${myName} LAGET)`;
+                if (this.topTowerLabel) this.topTowerLabel.innerText = `${foeName} LAGETS TORN`;
+            }
         } else {
             this.playerCarHpText.innerText = Math.max(0, Math.ceil(localCarHp));
             this.enemyCarHpText.innerText = Math.max(0, Math.ceil(remoteCarHp));
@@ -170,31 +223,35 @@ export class UIController {
         const state = upgradeManager.state;
         this.creditsWeaponsVal.innerText = state.credits;
         
-        const wpnKeys = ['katana', 'blades', 'hammer'];
+        const wpnKeys = ['katana', 'blades', 'hammer', 'oni'];
         wpnKeys.forEach(key => {
             const card = document.getElementById(`wpn-${key}`);
             if (!card) return;
             
             const isUnlocked = state.unlockedWeapons[key];
             const isEquipped = state.equippedWeapon === key;
-            const costText = card.querySelector('.weapon-cost');
-            
+
             // Remove previous event listeners by cloning
             const newCard = card.cloneNode(true);
             card.parentNode.replaceChild(newCard, card);
-            
+            // Look the label up on the clone: the old card is no longer in the page
+            const costText = newCard.querySelector('.weapon-cost');
+
             // Set styles
             if (isEquipped) {
                 newCard.className = 'weapon-card selected';
-                costText.innerText = 'EQUIPPED';
+                costText.innerText = 'VALD';
             } else if (isUnlocked) {
                 newCard.className = 'weapon-card';
                 costText.innerText = 'KLICKA FÖR ATT VÄLJA';
             } else {
                 newCard.className = 'weapon-card locked';
-                const costs = { blades: 100, hammer: 250 };
+                const costs = { blades: 100, hammer: 250, oni: 600 };
                 costText.innerText = `Kostar ⚡ ${costs[key]}`;
             }
+            // Setting className dropped the gamepad focus ring from the card
+            // the player just pressed A on
+            if (card.classList.contains('gp-focus')) newCard.classList.add('gp-focus');
 
             newCard.addEventListener('click', () => {
                 audioController.playClick();
@@ -238,6 +295,118 @@ export class UIController {
     }
 
     // Populate cannon shop elements and handle selections
+    // Samuraj-butik: one card per credit pack. Cards only react when Google
+    // Play can actually sell (see CreditStore); otherwise the status says why.
+    renderCreditShop(store, packs, onBuy) {
+        const grid = document.getElementById('coin-shop-grid');
+        if (!grid) return;
+        const creditsEl = document.getElementById('credits-coinshop-val');
+        if (creditsEl) creditsEl.innerText = store.upgradeMgr.state.credits;
+        const statusEl = document.getElementById('coin-shop-status');
+        if (statusEl) statusEl.innerText = store.status;
+
+        // The cards are rebuilt (also when the prices arrive from Google Play):
+        // put the gamepad focus ring back on the same card afterwards
+        const focusIdx = [...grid.children].findIndex((el) => el.classList.contains('gp-focus'));
+        grid.innerHTML = '';
+        packs.forEach((pack, i) => {
+            const card = document.createElement('div');
+            const buyable = store.canBuy(pack);
+            card.className = 'weapon-card' + (pack.badge ? ' selected' : '') + (buyable ? '' : ' locked') + (i === focusIdx ? ' gp-focus' : '');
+            const glow = document.createElement('div');
+            glow.className = 'weapon-glow ' + (pack.badge ? 'cyan' : 'orange');
+            card.appendChild(glow);
+            const title = document.createElement('h3');
+            title.innerText = `⚡ ${pack.credits.toLocaleString('sv-SE')} CREDITS`;
+            card.appendChild(title);
+            if (pack.badge) {
+                const badge = document.createElement('div');
+                badge.className = 'stat-row';
+                badge.innerText = `${pack.badge} Bästa köpet`;
+                card.appendChild(badge);
+            }
+            const cost = document.createElement('div');
+            cost.className = 'weapon-cost';
+            cost.innerText = buyable ? `KÖP FÖR ${store.prices[pack.id]}` : pack.price;
+            card.appendChild(cost);
+            card.addEventListener('click', () => onBuy(pack));
+            grid.appendChild(card);
+        });
+    }
+
+    // Hjälpmedel-butik: one card per pack, sold through Google Play like the credits
+    renderHelperShop(store, packs, helpers, onBuy) {
+        const grid = document.getElementById('helper-shop-grid');
+        if (!grid) return;
+        const owned = store.upgradeMgr.state.helpers || {};
+        const ownedEl = document.getElementById('helper-owned');
+        if (ownedEl) ownedEl.innerText = Object.keys(helpers).map((k) => `${helpers[k].icon} ${owned[k] || 0}`).join('   ');
+        const statusEl = document.getElementById('helper-shop-status');
+        if (statusEl) statusEl.innerText = store.status;
+        const focusIdx = [...grid.children].findIndex((el) => el.classList.contains('gp-focus'));
+        grid.innerHTML = '';
+        packs.forEach((pack, i) => {
+            const card = document.createElement('div');
+            const buyable = store.canBuy(pack);
+            card.className = 'weapon-card' + (pack.badge ? ' selected' : '') + (buyable ? '' : ' locked') + (i === focusIdx ? ' gp-focus' : '');
+            const glow = document.createElement('div');
+            glow.className = 'weapon-glow ' + (pack.badge ? 'cyan' : 'green');
+            card.appendChild(glow);
+            const keys = Object.keys(pack.helpers);
+            const title = document.createElement('h3');
+            if (pack.badge) {
+                title.innerText = `🧰 ${pack.badge}`;
+            } else {
+                const h = helpers[keys[0]];
+                title.innerText = `${h.icon} ${h.name} ×${pack.helpers[keys[0]]}`;
+            }
+            card.appendChild(title);
+            const desc = document.createElement('div');
+            desc.className = 'stat-row';
+            desc.innerText = pack.badge ? `${pack.helpers[keys[0]]} av varje hjälpmedel` : helpers[keys[0]].desc;
+            card.appendChild(desc);
+            const cost = document.createElement('div');
+            cost.className = 'weapon-cost';
+            cost.innerText = buyable ? `KÖP FÖR ${store.prices[pack.id]}` : pack.price;
+            card.appendChild(cost);
+            card.addEventListener('click', () => onBuy(pack));
+            grid.appendChild(card);
+        });
+    }
+
+    // Fusk-butik: one card per cheat (and one with all of them); owned ones say so
+    renderCheatShop(store, packs, cheats, onBuy) {
+        const grid = document.getElementById('cheat-shop-grid');
+        if (!grid) return;
+        const owned = store.upgradeMgr.state.cheats || {};
+        const statusEl = document.getElementById('cheat-shop-status');
+        if (statusEl) statusEl.innerText = store.status;
+        const focusIdx = [...grid.children].findIndex((el) => el.classList.contains('gp-focus'));
+        grid.innerHTML = '';
+        packs.forEach((pack, i) => {
+            const have = pack.cheats.every((k) => owned[k]);
+            const card = document.createElement('div');
+            const buyable = !have && store.canBuy(pack);
+            card.className = 'weapon-card' + (pack.badge || have ? ' selected' : '') + (buyable || have ? '' : ' locked') + (i === focusIdx ? ' gp-focus' : '');
+            const glow = document.createElement('div');
+            glow.className = 'weapon-glow ' + (pack.badge ? 'cyan' : 'pink');
+            card.appendChild(glow);
+            const title = document.createElement('h3');
+            title.innerText = pack.badge ? `😈 ${pack.badge}` : `${cheats[pack.cheats[0]].icon} ${cheats[pack.cheats[0]].name}`;
+            card.appendChild(title);
+            const desc = document.createElement('div');
+            desc.className = 'stat-row';
+            desc.innerText = pack.badge ? 'Alla fusk på en gång' : cheats[pack.cheats[0]].desc;
+            card.appendChild(desc);
+            const cost = document.createElement('div');
+            cost.className = 'weapon-cost';
+            cost.innerText = have ? 'DITT ✓' : buyable ? `KÖP FÖR ${store.prices[pack.id]}` : pack.price;
+            card.appendChild(cost);
+            card.addEventListener('click', () => onBuy(pack, have));
+            grid.appendChild(card);
+        });
+    }
+
     renderCannonShop(upgradeManager, onEquipOrUnlock, audioController) {
         const state = upgradeManager.state;
         this.creditsCannonsVal.innerText = state.credits;
@@ -269,6 +438,8 @@ export class UIController {
                 newCard.className = 'weapon-card';
                 newCostText.innerText = equipped.length >= 2 ? '◻ INAKTIV – klicka för att byta in (max 2 aktiva)' : '◻ INAKTIV – klicka för att aktivera';
             }
+            // keep the gamepad focus ring on the card (className dropped it)
+            if (card.classList.contains('gp-focus')) newCard.classList.add('gp-focus');
 
             newCard.addEventListener('click', () => {
                 audioController.playClick();
@@ -324,8 +495,8 @@ export class UIController {
         const subtitleEl = this.screens.victory.querySelector('.subtitle');
         if (isBoss) {
             if (titleEl) {
-                titleEl.innerText = "BOSS BESEGRAAD!";
-                titleEl.setAttribute('data-text', "BOSS BESEGRAAD!");
+                titleEl.innerText = "BOSS BESEGRAD!";
+                titleEl.setAttribute('data-text', "BOSS BESEGRAD!");
             }
             if (subtitleEl) {
                 subtitleEl.innerText = "Du krossade den svåra bossen!";
@@ -392,17 +563,19 @@ export class UIController {
                     }
 
                     const isWin = entry.result === 'Vinst';
-                    const resultBadge = `<span class="badge ${isWin ? 'badge-win' : 'badge-loss'}">${entry.result}</span>`;
+                    // (everything from the save file is escaped: it is only JSON in localStorage)
+                    const esc = (v) => this.escapeHtml(v);
+                    const resultBadge = `<span class="badge ${isWin ? 'badge-win' : 'badge-loss'}">${esc(entry.result || 'Förlust')}</span>`;
 
                     tr.innerHTML = `
                         <td class="col-rank ${rankClass}">${rankBadge}</td>
-                        <td class="col-score font-bold neon-text-cyan">${(entry.score || 0).toLocaleString('sv-SE')}</td>
-                        <td class="col-name">${this.escapeHtml(entry.name || '-')}</td>
-                        <td class="col-wave">Våg ${entry.wave || 1}</td>
-                        <td class="col-samurai">${entry.samurai || 'Cyber Ronin'}</td>
+                        <td class="col-score font-bold neon-text-cyan">${(Number(entry.score) || 0).toLocaleString('sv-SE')}</td>
+                        <td class="col-name">${esc(entry.name || '-')}</td>
+                        <td class="col-wave">Våg ${esc(entry.wave || 1)}</td>
+                        <td class="col-samurai">${esc(entry.samurai || 'Cyber Ronin')}</td>
                         <td class="col-result">${resultBadge}</td>
-                        <td class="col-kills">${entry.kills || 0}</td>
-                        <td class="col-date">${entry.date || '-'}</td>
+                        <td class="col-kills">${esc(entry.kills || 0)}</td>
+                        <td class="col-date">${esc(entry.date || '-')}</td>
                     `;
                     leaderboardBody.appendChild(tr);
                 });

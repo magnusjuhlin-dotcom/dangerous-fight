@@ -10,10 +10,21 @@ export class UpgradeManager {
             highestWave: 1,
             matchCount: 0,
             equippedWeapon: 'katana',
+            // Extra samurai (the team mate who jumps in at half time): which
+            // ones are bought, and which of them comes (null = none)
+            reinforcements: { katana: false, blades: false, hammer: false, oni: false },
+            reinforcementPick: null,
+            // Hjälpmedel bought in the HJÄLPMEDEL-BUTIK: how many of each are left
+            helpers: { shield: 0, energy: 0, rage: 0, revive: 0 },
+            // Fusk bought in the FUSK-BUTIK (owned), and which are switched on
+            cheats: { god: false, tower: false, energy: false, damage: false, slow: false, speed: false, homing: false, rage: false, freeze: false, lava: false, credits: false },
+            cheatsOn: { god: false, tower: false, energy: false, damage: false, slow: false, speed: false, homing: false, rage: false, freeze: false, lava: false, credits: false },
+            xp: 0, // experience: the samurai's level comes from this
             unlockedWeapons: {
                 katana: true,
                 blades: false,
-                hammer: false
+                hammer: false,
+                oni: false
             },
             equippedCannons: ['laser'],
             unlockedCannons: {
@@ -55,6 +66,18 @@ export class UpgradeManager {
                 if (typeof parsed.highestWave === 'number') this.state.highestWave = parsed.highestWave;
                 if (typeof parsed.matchCount === 'number') this.state.matchCount = parsed.matchCount;
                 if (typeof parsed.equippedWeapon === 'string') this.state.equippedWeapon = parsed.equippedWeapon;
+                if (typeof parsed.xp === 'number' && parsed.xp >= 0) this.state.xp = Math.floor(parsed.xp);
+                if (parsed.reinforcements) {
+                    this.state.reinforcements = { ...this.state.reinforcements, ...parsed.reinforcements };
+                }
+                if (typeof parsed.reinforcementPick === 'string' && this.state.reinforcements[parsed.reinforcementPick]) {
+                    this.state.reinforcementPick = parsed.reinforcementPick;
+                }
+                // older saves had a single reinforcement: that was a Cyber Ronin
+                if (parsed.reinforcement === true) {
+                    this.state.reinforcements.katana = true;
+                    if (!this.state.reinforcementPick) this.state.reinforcementPick = 'katana';
+                }
                 // Support both old (string) and new (array) save format
                 if (Array.isArray(parsed.equippedCannons)) {
                     this.state.equippedCannons = parsed.equippedCannons;
@@ -74,6 +97,13 @@ export class UpgradeManager {
                     this.state.upgrades = { ...this.state.upgrades, ...parsed.upgrades };
                 }
 
+                // Hjälpmedel and fusk bought for real money (sanitize() checks them).
+                // Without these the helpers left were lost on every restart, and
+                // the fusk switches were reset.
+                if (parsed.helpers && typeof parsed.helpers === 'object') this.state.helpers = parsed.helpers;
+                if (parsed.cheats && typeof parsed.cheats === 'object') this.state.cheats = parsed.cheats;
+                if (parsed.cheatsOn && typeof parsed.cheatsOn === 'object') this.state.cheatsOn = parsed.cheatsOn;
+
                 // Load scoreboard data
                 if (typeof parsed.highScore === 'number') this.state.highScore = parsed.highScore;
                 if (typeof parsed.totalScore === 'number') this.state.totalScore = parsed.totalScore;
@@ -85,7 +115,67 @@ export class UpgradeManager {
             }
         } catch (e) {
             console.error("Failed to load save state from LocalStorage:", e);
+            // Keep the unreadable save aside: the next save() overwrites the key
+            try {
+                const raw = localStorage.getItem(this.saveKey);
+                if (raw) localStorage.setItem(this.saveKey + '_corrupt', raw);
+            } catch (e2) {}
         }
+        this.sanitize();
+    }
+
+    // A save edited by hand, written by an older version or half-broken must
+    // not give negative/NaN credits, "Nivå undefined", or an unowned samurai
+    sanitize() {
+        const s = this.state;
+        const own = (obj, k) => Object.prototype.hasOwnProperty.call(obj, k);
+        const count = (v, min = 0) => (typeof v === 'number' && isFinite(v) ? Math.max(min, Math.floor(v)) : min);
+        s.credits = count(s.credits);
+        s.highestWave = count(s.highestWave, 1);
+        s.matchCount = count(s.matchCount);
+        s.xp = count(s.xp);
+        ['highScore', 'totalScore', 'totalWins', 'totalLosses', 'totalKills'].forEach((k) => { s[k] = count(s[k]); });
+
+        // owned/unlocked maps: only real true/false (a key the defaults don't
+        // know, e.g. something bought in a newer version, is kept when true)
+        const bools = (obj, defaults) => {
+            const out = { ...defaults };
+            if (obj && typeof obj === 'object') {
+                Object.keys(obj).forEach((k) => {
+                    if (k !== '__proto__' && (own(defaults, k) || obj[k] === true)) out[k] = obj[k] === true;
+                });
+            }
+            return out;
+        };
+        s.unlockedWeapons = bools(s.unlockedWeapons, { katana: true, blades: false, hammer: false, oni: false });
+        s.unlockedWeapons.katana = true;
+        if (typeof s.equippedWeapon !== 'string' || !own(s.unlockedWeapons, s.equippedWeapon) || !s.unlockedWeapons[s.equippedWeapon]) s.equippedWeapon = 'katana';
+
+        s.unlockedCannons = bools(s.unlockedCannons, { laser: true, plasma: false, trio: false, rapid: false, hagel: false, sniper: false, bakåt: false });
+        s.unlockedCannons.laser = true;
+        if (!Array.isArray(s.equippedCannons)) s.equippedCannons = ['laser'];
+        this.normalizeCannons();
+
+        // (the Extra samuraj shop also sells the Oni Berserker)
+        s.reinforcements = bools(s.reinforcements, { katana: false, blades: false, hammer: false, oni: false });
+        const helpers = s.helpers && typeof s.helpers === 'object' ? s.helpers : {};
+        s.helpers = {};
+        ['shield', 'energy', 'rage', 'revive'].forEach((k) => { s.helpers[k] = count(helpers[k]); });
+        const noCheats = { god: false, tower: false, energy: false, damage: false, slow: false, speed: false, homing: false, rage: false, freeze: false, lava: false, credits: false };
+        s.cheats = bools(s.cheats, noCheats);
+        s.cheatsOn = bools(s.cheatsOn, noCheats);
+        Object.keys(s.cheatsOn).forEach((k) => { if (!s.cheats[k]) s.cheatsOn[k] = false; });
+        if (typeof s.reinforcementPick !== 'string' || !own(s.reinforcements, s.reinforcementPick) || !s.reinforcements[s.reinforcementPick]) s.reinforcementPick = null;
+
+        const upg = s.upgrades && typeof s.upgrades === 'object' ? s.upgrades : {};
+        s.upgrades = { health: count(upg.health), posture: count(upg.posture), credits: count(upg.credits) };
+
+        s.leaderboard = (Array.isArray(s.leaderboard) ? s.leaderboard : [])
+            .filter((e) => e && typeof e === 'object')
+            .map((e) => ({ ...e, score: count(e.score) }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
+        if (typeof s.playerName !== 'string') s.playerName = '';
     }
 
     // Save data to LocalStorage
@@ -173,13 +263,39 @@ export class UpgradeManager {
 
     // Add credits to balance
     addCredits(amount) {
-        this.state.credits = Math.floor(this.state.credits + amount);
+        if (typeof amount !== 'number' || !isFinite(amount)) return; // never poison the balance with NaN
+        this.state.credits = Math.max(0, Math.floor(this.state.credits + amount));
         this.save();
+    }
+
+    // Hjälpmedel: add a bought pack, or use one up (true when there was one)
+    addHelpers(grants, times = 1) {
+        // (the trailer puts the whole save back when it ends: it replays this log)
+        if (Array.isArray(this.purchaseLog)) this.purchaseLog.push({ helpers: { ...grants }, times });
+        Object.keys(grants || {}).forEach((k) => {
+            if (!(k in this.state.helpers)) return;
+            this.state.helpers[k] += Math.max(0, Math.floor(grants[k] * times)) || 0;
+        });
+        this.save();
+    }
+
+    unlockCheats(keys) {
+        if (Array.isArray(this.purchaseLog)) this.purchaseLog.push({ cheats: [...(keys || [])] });
+        (keys || []).forEach((k) => { if (k in this.state.cheats) this.state.cheats[k] = true; });
+        this.save();
+    }
+
+    useHelper(key) {
+        if (!this.state.helpers || !(this.state.helpers[key] > 0)) return false;
+        this.state.helpers[key]--;
+        this.save();
+        return true;
     }
 
     // Spend credits, returns true if successful
     spendCredits(amount) {
         const cost = Math.round(amount);
+        if (!isFinite(cost) || cost < 0) return false; // a bad price must not add credits
         if (this.state.credits >= cost) {
             this.state.credits = Math.floor(this.state.credits - cost);
             this.save();
@@ -258,7 +374,7 @@ export class UpgradeManager {
 
     // Make sure the loadout is valid: at least one cannon, never more than the cap
     normalizeCannons() {
-        let list = (this.state.equippedCannons || []).filter((k, i, a) => this.state.unlockedCannons[k] && a.indexOf(k) === i);
+        let list = (this.state.equippedCannons || []).filter((k, i, a) => typeof k === 'string' && this.state.unlockedCannons[k] === true && a.indexOf(k) === i);
         if (list.length === 0) list = ['laser'];
         if (list.length > UpgradeManager.MAX_ACTIVE_CANNONS) {
             list = list.slice(-UpgradeManager.MAX_ACTIVE_CANNONS); // keep the most recent picks

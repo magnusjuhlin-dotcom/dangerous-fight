@@ -4,6 +4,12 @@ import { CanvasController } from './canvas.js';
 import { AudioSynth } from './audio.js';
 import { InputController } from './input.js';
 import { UpgradeManager } from './upgrades.js';
+import { CreditStore, CREDIT_PACKS, HELPERS, HELPER_PACKS, CHEATS, CHEAT_PACKS } from './store.js';
+import { I18n } from './i18n.js';
+import { Trailer } from './trailer.js';
+import { Settings } from './settings.js';
+import { Missions } from './missions.js';
+import { LevelArena, levelForWave, WAVES_PER_LEVEL, MAX_LEVEL } from './levels.js';
 import { UIController } from './ui.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
@@ -16,6 +22,17 @@ class Game {
         this.audioSynth = new AudioSynth();
         this.inputCtrl = new InputController(this.canvasCtrl.canvas);
         this.upgradeMgr = new UpgradeManager();
+        this.settings = new Settings();
+        this.missions = new Missions(this.upgradeMgr);
+        // a 2-player match on one phone records nothing, missions included
+        const trackMission = this.missions.track.bind(this.missions);
+        this.missions.track = (...args) => (this.local2p ? undefined : trackMission(...args));
+        const applySound = () => {
+            this.audioSynth.setVolumes(this.settings.get('music'), this.settings.get('effects'));
+            this.audioSynth.voiceOn = this.settings.get('voice');
+        };
+        applySound();
+        this.settings.onChange(applySound);
         this.uiCtrl = new UIController();
         this.particles = new ParticleSystem();
         
@@ -72,40 +89,7 @@ class Game {
         this.lastLavaSizzlePlayer = 0;
         this.lastLavaSizzleEnemy = 0;
         this.lavaBubbles = [];
-        this.lavaCrustPlates = [];
-        const plateCount = 13;
-        for (let i = 0; i < plateCount; i++) {
-            this.lavaCrustPlates.push({
-                // position as a fraction of the river length, so it fits any screen width
-                u: (i + Math.random() * 0.6) / plateCount,
-                yOffset: (Math.random() - 0.5) * 20,
-                // everything drifts with the current (to the right), slow plates lag behind
-                vx: Math.random() * 0.02 + 0.014,
-                width: Math.random() * 46 + 26,
-                height: Math.random() * 16 + 11,
-                angle: Math.random() * Math.PI,
-                rotSpeed: (Math.random() - 0.5) * 0.0006,
-                points: [
-                    { x: -1, y: -0.8 + Math.random() * 0.3 },
-                    { x: -0.2 + Math.random() * 0.3, y: -1 },
-                    { x: 1, y: -0.6 + Math.random() * 0.3 },
-                    { x: 0.8 + Math.random() * 0.3, y: 0.8 },
-                    { x: -0.3 + Math.random() * 0.3, y: 1 },
-                    { x: -1, y: 0.5 + Math.random() * 0.3 }
-                ]
-            });
-        }
-        
-        // Roaming white-hot spots inside the lava
-        this.lavaHotspots = [];
-        for (let i = 0; i < 7; i++) {
-            this.lavaHotspots.push({
-                u: Math.random(),
-                speed: 0.012 + Math.random() * 0.012,
-                size: 22 + Math.random() * 20,
-                phase: Math.random() * Math.PI * 2
-            });
-        }
+        // (the melt and its crust are textures: CanvasController.getLavaTextures)
 
         this.initUIEvents();
         this.initInputEvents();
@@ -119,10 +103,335 @@ class Game {
     }
 
     // Bind DOM overlay menu buttons
+    // Swipe sideways between the menu pages: main menu -> scoreboard -> dojo
+    // -> ... in the order of the main menu buttons. Each page is opened
+    // through its own menu button, so it is rendered exactly as usual.
+    static get MENU_PAGES() {
+        return [
+            { screen: 'main-menu', open: null },
+            { screen: 'scoreboard-screen', open: 'btn-scoreboard' },
+            { screen: 'weapons-menu', open: 'btn-weapons' },
+            { screen: 'cannons-menu', open: 'btn-cannons' },
+            { screen: 'upgrades-menu', open: 'btn-upgrades' },
+            { screen: 'reinforce-screen', open: 'btn-reinforce' },
+            { screen: 'coin-shop-screen', open: 'btn-coin-shop' },
+            { screen: 'helper-shop-screen', open: 'btn-helper-shop' },
+            { screen: 'cheat-shop-screen', open: 'btn-cheat-shop' },
+            { screen: 'missions-screen', open: 'btn-missions' },
+            { screen: 'howto-screen', open: 'btn-howto' }
+        ];
+    }
+
+    currentMenuPage() {
+        if (this.gameState === 'playing') return -1;
+        const box = document.getElementById('lang-box');
+        if (box && !box.classList.contains('hidden')) return -1;
+        return Game.MENU_PAGES.findIndex(p => {
+            const el = document.getElementById(p.screen);
+            return el && !el.classList.contains('hidden');
+        });
+    }
+
+    goToMenuPage(index, dir) {
+        const pages = Game.MENU_PAGES;
+        if (index < 0 || index >= pages.length) return;
+        const page = pages[index];
+        if (page.open) document.getElementById(page.open).click();
+        else { this.audioSynth.playClick(); this.uiCtrl.showScreen('menu'); }
+        const el = document.getElementById(page.screen);
+        if (el) {
+            // slide in from the side the finger came from
+            el.classList.remove('slide-from-left', 'slide-from-right');
+            void el.offsetWidth; // restart the animation
+            el.classList.add(dir > 0 ? 'slide-from-right' : 'slide-from-left');
+            // only for this visit: otherwise it slides in again whenever the
+            // screen is shown later (by a button, TILLBAKA...)
+            clearTimeout(el.slideTimer);
+            el.slideTimer = setTimeout(() => el.classList.remove('slide-from-left', 'slide-from-right'), 300);
+        }
+        this.updateMenuDots();
+    }
+
+    updateMenuDots() {
+        const dots = document.getElementById('menu-dots');
+        if (!dots) return;
+        const cur = this.currentMenuPage();
+        dots.classList.toggle('hidden', cur < 0);
+        if (cur < 0) return;
+        if (dots.children.length !== Game.MENU_PAGES.length) {
+            dots.innerHTML = Game.MENU_PAGES.map(() => '<span></span>').join('');
+        }
+        [...dots.children].forEach((d, i) => d.classList.toggle('on', i === cur));
+    }
+
+    initMenuSwipe() {
+        let start = null;
+        const begin = (x, y, target) => {
+            // a table that scrolls sideways (the scoreboard) keeps its own swipes
+            const scroller = target && target.closest && target.closest('.leaderboard-table-wrapper');
+            start = this.currentMenuPage() >= 0 && !scroller ? { x, y, t: performance.now() } : null;
+        };
+        const end = (x, y) => {
+            if (!start) return false;
+            const dx = x - start.x, dy = y - start.y, dt = performance.now() - start.t;
+            start = null;
+            // a clear sideways flick, not a scroll or a tap
+            if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5 || dt > 900) return false;
+            const cur = this.currentMenuPage();
+            if (cur < 0) return false;
+            const dir = dx < 0 ? 1 : -1; // finger to the left = next page
+            this.goToMenuPage(cur + dir, dir);
+            return true;
+        };
+        window.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) begin(e.touches[0].clientX, e.touches[0].clientY, e.target);
+        }, { passive: true });
+        window.addEventListener('touchend', (e) => {
+            const t = e.changedTouches[0];
+            if (t) end(t.clientX, t.clientY);
+        }, { passive: true });
+        window.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+        window.addEventListener('mousedown', (e) => begin(e.clientX, e.clientY, e.target));
+        window.addEventListener('mouseup', (e) => {
+            if (!end(e.clientX, e.clientY)) return;
+            // A mouse drag still ends in a click on the button or shop card it
+            // started on: swallow it, or the swipe also starts a match / buys
+            const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+            window.addEventListener('click', swallow, true);
+            setTimeout(() => window.removeEventListener('click', swallow, true), 0);
+        });
+        // Tapping a dot jumps straight to that page
+        document.getElementById('menu-dots').addEventListener('click', (e) => {
+            const dots = e.currentTarget;
+            const dot = e.target.closest('span');
+            if (!dot) return;
+            const i = [...dots.children].indexOf(dot);
+            const cur = this.currentMenuPage();
+            if (cur < 0 || i < 0 || i === cur) return;
+            this.goToMenuPage(i, i > cur ? 1 : -1);
+        });
+
+        // keep the page dots right whatever opened the screen (buttons, back...)
+        const watch = new MutationObserver(() => { this.updateMenuDots(); this.updateMissionsBadge(); });
+        document.querySelectorAll('.overlay-screen').forEach(el => watch.observe(el, { attributes: true, attributeFilter: ['class'] }));
+        this.updateMenuDots();
+    }
+
+    // ---- Settings, missions, pause ----
+    initExtraScreens() {
+        const s = this.settings;
+        const $ = (id) => document.getElementById(id);
+
+        // Settings: opened from the menu gear or from the pause screen
+        const openSettings = (from) => {
+            this.settingsReturn = from;
+            this.audioSynth.playClick();
+            this.renderSettings();
+            this.uiCtrl.showScreen('settings');
+        };
+        $('btn-settings').addEventListener('click', () => openSettings('menu'));
+        $('btn-pause-settings').addEventListener('click', () => openSettings('pause'));
+        $('btn-settings-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen(this.settingsReturn === 'pause' ? 'pause' : 'menu');
+        });
+        $('set-music').addEventListener('input', (e) => s.set('music', e.target.value / 100));
+        $('set-effects').addEventListener('input', (e) => s.set('effects', e.target.value / 100));
+        $('set-effects').addEventListener('change', () => this.audioSynth.playClick()); // hear the new level
+        $('set-voice').addEventListener('change', (e) => s.set('voice', e.target.checked));
+        $('set-vibration').addEventListener('change', (e) => {
+            s.set('vibration', e.target.checked);
+            s.vibrate(60); // feel it switch on
+        });
+        // The difficulty can be picked in settings and right before a match
+        document.querySelectorAll('.difficulty-picker').forEach((picker) => {
+            picker.addEventListener('click', (e) => {
+                const btn = e.target.closest('.diff-btn');
+                if (!btn) return;
+                this.audioSynth.playClick();
+                s.set('difficulty', btn.dataset.diff);
+                this.renderDifficulty();
+            });
+        });
+        this.renderDifficulty();
+
+        // Missions
+        $('btn-missions').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.renderMissions();
+            this.uiCtrl.showScreen('missions');
+        });
+        $('btn-missions-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+        this.updateMissionsBadge();
+
+        // Pause (matches against the computer only: online the others keep playing)
+        $('btn-pause').addEventListener('click', () => this.pauseMatch());
+        $('btn-resume').addEventListener('click', () => this.resumeMatch());
+        $('btn-quit-match').addEventListener('click', () => this.quitMatch());
+
+        // Back from the perk choice: nothing has started yet
+        $('btn-perks-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.perkChoice = null; // a card clicked just before must not start the match
+            // startRun counted this match for the every-other-one boss rule: undo it
+            const st = this.upgradeMgr.state;
+            if (!this.isMultiplayer && !this.teamLayout && st.matchCount > 0) {
+                st.matchCount--;
+                this.upgradeMgr.save();
+            }
+            this.leaveToMenu();
+        });
+    }
+
+    renderSettings() {
+        const s = this.settings;
+        document.getElementById('set-music').value = Math.round(s.get('music') * 100);
+        document.getElementById('set-effects').value = Math.round(s.get('effects') * 100);
+        document.getElementById('set-voice').checked = s.get('voice');
+        document.getElementById('set-vibration').checked = s.get('vibration');
+        this.renderDifficulty();
+    }
+
+    renderDifficulty() {
+        const d = this.settings.get('difficulty');
+        document.querySelectorAll('.diff-btn[data-diff]').forEach((b) => b.classList.toggle('selected', b.dataset.diff === d));
+    }
+
+    renderMissions() {
+        const list = document.getElementById('missions-list');
+        const credits = document.getElementById('credits-missions-val');
+        if (credits) credits.innerText = this.upgradeMgr.state.credits;
+        list.innerHTML = '';
+        this.missions.list().forEach((m) => {
+            const row = document.createElement('div');
+            row.className = 'mission' + (m.claimed ? ' claimed' : m.done ? ' done' : '');
+            row.innerHTML = `<div class="mission-top"><span></span><span class="mission-reward"></span></div>
+                <div class="mission-bar"><div></div></div>
+                <div class="mission-bottom"><span></span></div>`;
+            row.querySelector('.mission-top span').innerText = m.text;
+            row.querySelector('.mission-reward').innerText = `⚡ ${m.reward}`;
+            row.querySelector('.mission-bar > div').style.width = `${Math.round(100 * m.progress / m.goal)}%`;
+            row.querySelector('.mission-bottom span').innerText = `${m.progress} / ${m.goal}`;
+            if (m.claimed) {
+                const done = document.createElement('span');
+                done.innerText = 'HÄMTAD ✓';
+                row.querySelector('.mission-bottom').appendChild(done);
+            } else if (m.done) {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-primary neon-btn-green mission-claim';
+                btn.innerText = 'HÄMTA';
+                btn.addEventListener('click', () => {
+                    if (this.missions.claim(m.id)) {
+                        this.audioSynth.playUpgrade();
+                        this.settings.vibrate(60);
+                    }
+                    this.renderMissions();
+                    this.updateMissionsBadge();
+                });
+                row.querySelector('.mission-bottom').appendChild(btn);
+            }
+            list.appendChild(row);
+        });
+    }
+
+    updateMissionsBadge() {
+        const badge = document.getElementById('missions-badge');
+        if (!badge || !this.missions) return;
+        const n = this.missions.readyCount();
+        badge.innerText = n;
+        badge.classList.toggle('hidden', n === 0);
+    }
+
+    pauseMatch() {
+        if (this.gameState !== 'playing' || this.isMultiplayer || (this.trailer && this.trailer.active)) return;
+        // The finisher runs on the wall clock: paused, it would run out and
+        // drop the result, leaving a match with a fallen tower
+        if (this.finisher) return;
+        this.audioSynth.playClick();
+        this.gameState = 'paused';
+        this.pausedAt = performance.now();
+        // Drop an aim in progress: its release is ignored while paused, so a
+        // gamepad aim (which holds the samurai still) left it frozen, and a
+        // swipe left the aim line hanging, after resuming
+        this.player.isAiming = false;
+        this.player.aimDx = 0;
+        this.player.aimDy = 0;
+        this.audioSynth.stopMusic();
+        this.uiCtrl.showScreen('pause');
+    }
+
+    resumeMatch() {
+        if (this.gameState !== 'paused') return;
+        this.audioSynth.playClick();
+        // the raseri's 6 s are wall clock too: give back the time spent paused
+        if (this.rageUntil) this.rageUntil += performance.now() - (this.pausedAt || performance.now());
+        this.gameState = 'playing';
+        this.uiCtrl.showScreen('hud');
+        this.audioSynth.startMusic();
+    }
+
+    quitMatch() {
+        this.audioSynth.playClick();
+        this.leaveToMenu();
+    }
+
+    // Out of a match (or the perk choice) straight to the main menu, nothing recorded
+    leaveToMenu() {
+        this.finisher = null;
+        this.gameState = 'menu';
+        this.teamLayout = null;
+        this.clearTeamMatch();
+        this.slowMoTimer = 0;
+        this.particles.clear();
+        this.projectiles = [];
+        this.audioSynth.stopMusic();
+        const banner = document.getElementById('boss-warning');
+        if (banner) banner.classList.add('hidden');
+        this.uiCtrl.showScreen('menu');
+        this.flushLevelUp(); // a level reached by a K.O. before quitting
+    }
+
     initUIEvents() {
+        this.initMenuSwipe();
+        this.initExtraScreens();
+        this.initLocal2pControls();
+        document.getElementById('btn-play-local').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.startLocal2p();
+        });
+        this.updateLevelDisplay();
+        // after the language has been chosen (the language box comes first)
+        // (the box is only un-hidden further down, so ask whether it will be)
+        const giftLangBox = document.getElementById('lang-box');
+        if (giftLangBox && !window.i18n.chosen) {
+            const waitLang = new MutationObserver(() => {
+                if (giftLangBox.classList.contains('hidden')) { waitLang.disconnect(); this.checkDailyGift(); }
+            });
+            waitLang.observe(giftLangBox, { attributes: true, attributeFilter: ['class'] });
+        } else {
+            setTimeout(() => this.checkDailyGift(), 600);
+        }
+        // the app left in the background overnight: a new day, a new gift
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && this.gameState === 'menu' && window.i18n.chosen) this.checkDailyGift();
+        });
+
+        // The trailer: a cinematic that plays itself
+        this.trailer = new Trailer(this);
+        document.getElementById('btn-trailer').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.trailer.start();
+        });
         // Single Player vs AI
         document.getElementById('btn-play-ai').addEventListener('click', () => {
             this.audioSynth.playClick();
+            // The result screen's "Poängtavla" -> back reaches the menu without
+            // leaving the last match: drop its room and team layout, or this
+            // starts another team match (or keeps taking the old room's packets)
+            this.cleanupNetwork();
             this.isMultiplayer = false;
             this.startRun();
         });
@@ -272,6 +581,17 @@ class Game {
             this.uiCtrl.renderWeaponShop(this.upgradeMgr, (key) => this.handleWeaponArsenal(key), this.audioSynth);
             this.uiCtrl.showScreen('weapons');
         });
+
+        // Extra samuraj shop
+        document.getElementById('btn-reinforce').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.renderReinforcementShop();
+            this.uiCtrl.showScreen('reinforce');
+        });
+        document.getElementById('btn-reinforce-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
         
         document.getElementById('btn-weapons-back').addEventListener('click', () => {
             this.audioSynth.playClick();
@@ -279,6 +599,43 @@ class Game {
         });
 
         // Cannons menu
+        // Samuraj-butik: Cyber-Credits for real money via Google Play
+        this.creditStore = new CreditStore(this.upgradeMgr, () => {
+            if (!this.uiCtrl.screens.coinshop.classList.contains('hidden')) this.renderCreditShop();
+            if (!this.uiCtrl.screens.helpershop.classList.contains('hidden')) this.renderHelperShop();
+            if (!this.uiCtrl.screens.cheatshop.classList.contains('hidden')) this.renderCheatShop();
+        });
+        document.getElementById('btn-cheat-shop').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.creditStore.refresh();
+            this.renderCheatShop();
+            this.uiCtrl.showScreen('cheatshop');
+        });
+        document.getElementById('btn-cheat-shop-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+        document.getElementById('btn-helper-shop').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.creditStore.refresh();
+            this.renderHelperShop();
+            this.uiCtrl.showScreen('helpershop');
+        });
+        document.getElementById('btn-helper-shop-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+        document.getElementById('btn-coin-shop').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.creditStore.refresh();
+            this.renderCreditShop();
+            this.uiCtrl.showScreen('coinshop');
+        });
+        document.getElementById('btn-coin-shop-back').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            this.uiCtrl.showScreen('menu');
+        });
+
         document.getElementById('btn-cannons').addEventListener('click', () => {
             this.audioSynth.playClick();
             this.uiCtrl.renderCannonShop(this.upgradeMgr, (key) => this.handleCannonArsenal(key), this.audioSynth);
@@ -302,6 +659,27 @@ class Game {
             this.uiCtrl.showScreen('menu');
         });
 
+        // Get the recorded voice lines ready before anyone presses 🔊
+        this.audioSynth.preloadRecordings(['intro', 'intro-boss', 'lurvig-kanin',
+            ...[...document.querySelectorAll('.overlay-screen')].map(el => el.id)]);
+        // "AJ Sports - to the game!" as the game starts
+        this.audioSynth.tryStartupVoice();
+
+        // Language box: asked on the first start, and from the menu
+        const langBox = document.getElementById('lang-box');
+        const chooseLang = (lang) => {
+            this.audioSynth.playClick();
+            window.i18n.setLang(lang);
+            langBox.classList.add('hidden');
+        };
+        document.getElementById('btn-lang-sv').addEventListener('click', () => chooseLang('sv'));
+        document.getElementById('btn-lang-en').addEventListener('click', () => chooseLang('en'));
+        document.getElementById('btn-language').addEventListener('click', () => {
+            this.audioSynth.playClick();
+            langBox.classList.remove('hidden');
+        });
+        if (!window.i18n.chosen) langBox.classList.remove('hidden');
+
         // Read-aloud speaker: reads every visible text on the current screen
         const speakBtn = document.getElementById('btn-speak');
         if (speakBtn) {
@@ -316,10 +694,12 @@ class Game {
                 const text = this.collectScreenText();
                 speakBtn.classList.add('speaking');
                 speakBtn.innerText = '⏹';
+                // A screen with a recorded voice (assets/voice/<screen id>.mp3) plays that
+                const screen = [...document.querySelectorAll('.overlay-screen')].find(el => !el.classList.contains('hidden'));
                 const started = this.audioSynth.readAloud(text, () => {
                     speakBtn.classList.remove('speaking');
                     speakBtn.innerText = '🔊';
-                });
+                }, screen ? screen.id : null);
                 if (!started) {
                     speakBtn.classList.remove('speaking');
                     speakBtn.innerText = '🔊';
@@ -407,18 +787,28 @@ class Game {
         const shootBtn = document.getElementById('shoot-btn');
         const triggerShoot = (e) => {
             if (e.cancelable) e.preventDefault();
-            this.player.shoot();
+            this.playerShoot();
         };
         shootBtn.addEventListener('click', triggerShoot);
         shootBtn.addEventListener('touchstart', triggerShoot, { passive: false });
+
+        const rageBtn = document.getElementById('rage-btn');
+        const triggerRage = (e) => {
+            if (e.cancelable) e.preventDefault();
+            this.activateRage();
+        };
+        rageBtn.addEventListener('click', triggerRage);
+        rageBtn.addEventListener('touchstart', triggerRage, { passive: false });
     }
 
     // Bind dragging slingshot gameplay inputs
     initInputEvents() {
         this.inputCtrl.onDragStart = (x, y, fromGamepad = false) => {
-            if (this.gameState !== 'playing') return false;
+            if (this.gameState !== 'playing' || this.finisher) return false;
+            // 2 players: the top half of the screen belongs to the other player
+            if (this.local2p && !fromGamepad && y < this.canvasCtrl.height / 2) return false;
             if (fromGamepad || this.player.containsPoint(x, y)) {
-                return this.player.startDrag();
+                return this.player.startDrag(fromGamepad);
             }
             return false;
         };
@@ -426,32 +816,494 @@ class Game {
         // Gamepad (Xbox) hooks
         this.inputCtrl.isGameplayActive = () => this.gameState === 'playing';
         this.inputCtrl.onGamepadShoot = () => {
-            if (this.gameState === 'playing') this.player.shoot();
+            if (this.gameState === 'playing') this.playerShoot();
         };
         this.inputCtrl.onGamepadSpeak = () => {
             const b = document.getElementById('btn-speak');
             if (b) b.click();
         };
         this.inputCtrl.onGamepadMenu = (action) => this.gamepadMenuNav(action);
+        this.inputCtrl.onGamepadPause = () => {
+            if (this.gameState === 'playing') this.pauseMatch();
+            else if (this.gameState === 'paused') this.resumeMatch();
+        };
         this.inputCtrl.onGamepadConnected = (pad) => this.onGamepadConnected(pad);
         
         this.inputCtrl.onDragMove = (dx, dy) => {
             if (this.gameState !== 'playing') return;
             this.player.dragMove(dx, dy);
+            // tells the gamepad whether the aim is still on (dying cancels it)
+            return this.player.isAiming;
         };
 
         this.inputCtrl.onDragEnd = (dx, dy) => {
             if (this.gameState !== 'playing') return;
+            const before = Math.hypot(this.player.vx, this.player.vy);
             this.player.endDrag();
+            if (Math.hypot(this.player.vx, this.player.vy) > before + 0.3) {
+                this.missions.track('dash');
+                this.tutorialEvent('dash');
+            }
         };
 
         // Keyboard Arrow/WASD fallback
         this.inputCtrl.onKeyboardLaunch = (dirX, dirY) => {
             if (this.gameState !== 'playing' || this.player.state === 'dead') return;
-            this.player.vx = dirX * 1.7 * this.player.profile.speedMultiplier;
-            this.player.vy = dirY * 1.7 * this.player.profile.speedMultiplier;
+            // (SUPERFART fusk here too, like a swipe: see Player.endDrag)
+            const cheatSpeed = this.cheats && this.cheats.speed ? 1.5 : 1;
+            this.player.vx = dirX * 1.7 * this.player.profile.speedMultiplier * cheatSpeed;
+            this.player.vy = dirY * 1.7 * this.player.profile.speedMultiplier * cheatSpeed;
             this.audioSynth.playSlash(this.player.activeWeaponKey);
+            this.missions.track('dash');
+            this.tutorialEvent('dash');
         };
+    }
+
+    // ---- 2 players on one phone ----
+    startLocal2p() {
+        this.cleanupNetwork();
+        this.isMultiplayer = false;
+        this.teamLayout = null;
+        this.pendingLocal2p = true;
+        this.startRun();
+        this.enemy.aiControlled = false; // a person plays it
+        this.enemy.energy = 0;
+        this.enemy.chargeTimer = 0;
+        this.topSwipes = new Map();
+    }
+
+    // The top player swipes on the top half and fires with the turned button
+    initLocal2pControls() {
+        const canvas = this.canvasCtrl.canvas;
+        const toArena = (t) => {
+            const r = canvas.getBoundingClientRect();
+            return { x: (t.clientX - r.left) * this.canvasCtrl.width / r.width, y: (t.clientY - r.top) * this.canvasCtrl.height / r.height };
+        };
+        canvas.addEventListener('touchstart', (e) => {
+            if (!this.local2p || this.gameState !== 'playing' || this.finisher) return;
+            for (const t of e.changedTouches) {
+                const p = toArena(t);
+                if (p.y < this.canvasCtrl.height / 2) this.topSwipes.set(t.identifier, p);
+            }
+        }, { passive: true });
+        const end = (e) => {
+            if (!this.local2p || !this.topSwipes) return;
+            for (const t of e.changedTouches) {
+                const start = this.topSwipes.get(t.identifier);
+                if (!start) continue;
+                this.topSwipes.delete(t.identifier);
+                if (e.type === 'touchcancel' || this.gameState !== 'playing' || this.finisher) continue;
+                const p = toArena(t);
+                const dx = p.x - start.x, dy = p.y - start.y, d = Math.hypot(dx, dy);
+                const e2 = this.enemy;
+                if (d < 12 || e2.state === 'dead') continue;
+                // same feel as the bottom player's swipe
+                const power = Math.min(120, 55 + d) * 0.017;
+                e2.vx = (dx / d) * power;
+                e2.vy = (dy / d) * power;
+                this.audioSynth.playSlash(e2.activeWeaponKey || 'katana');
+            }
+        };
+        canvas.addEventListener('touchend', end, { passive: true });
+        canvas.addEventListener('touchcancel', end, { passive: true });
+        const fire = (e) => {
+            if (e.cancelable) e.preventDefault();
+            this.topPlayerShoot();
+        };
+        const btn = document.getElementById('shoot-btn-2');
+        btn.addEventListener('click', fire);
+        btn.addEventListener('touchstart', fire, { passive: false });
+    }
+
+    topPlayerShoot() {
+        const e = this.enemy;
+        if (!this.local2p || this.gameState !== 'playing' || e.state === 'dead' || e.energy <= 0) return;
+        e.energy--;
+        this.audioSynth.playShoot();
+        this.spawnProjectile(e.x, e.y, 0, 0.45, 8, 'enemy');
+        e.vy -= 0.045 / (e.mass || 1); // recoil, like the player's
+    }
+
+    // The top samurai charges energy standing still in its own zone, like the player
+    updateLocalTopPlayer(dt) {
+        const e = this.enemy;
+        if (e.state === 'dead') return;
+        const inZone = e.y < 150;
+        if (inZone && Math.hypot(e.vx, e.vy) < 0.04 && e.energy < 3) {
+            e.chargeTimer = (e.chargeTimer || 0) + dt;
+            if (e.chargeTimer >= 1500) {
+                e.energy++;
+                e.chargeTimer = 0;
+                this.audioSynth.playUpgrade();
+                this.particles.spawnShockwave(e.x, e.y, '#ff0077', 30);
+            }
+        } else {
+            e.chargeTimer = 0;
+        }
+    }
+
+    // The result of a 2-player match: who won, nothing recorded
+    handleLocal2pEnd(bottomWon) {
+        this.gameState = bottomWon ? 'victory' : 'gameover';
+        const screen = document.getElementById(bottomWon ? 'victory-screen' : 'game-over-screen');
+        screen.querySelector('h1').innerText = bottomWon ? 'SPELARE 1 VANN!' : 'SPELARE 2 VANN!';
+        screen.querySelector('.subtitle').innerText = bottomWon ? 'Spelare 1 (nere) förstörde tornet.' : 'Spelare 2 (uppe) förstörde tornet.';
+        screen.dataset.local2p = '1';
+        // (the stats still hold the last real match's score and credits)
+        screen.querySelectorAll('.highscore-badge, .podium-form, .run-stats').forEach(el => el.classList.add('hidden'));
+        this.uiCtrl.showScreen(bottomWon ? 'victory' : 'gameover');
+        this.audioSynth.playVictory();
+        this.settings.vibrate([80, 60, 200]);
+        this.sayAfterMatch();
+    }
+
+    // After every match someone says "Vilken lurvig kanin, va?" (a recording
+    // in assets/voice/lurvig-kanin.<ext> if there is one, otherwise the speech
+    // engine). Not if the next match has already started by then.
+    sayAfterMatch() {
+        if (this.trailer && this.trailer.active) return;
+        if (this.audioSynth.voiceOn === false) return;
+        clearTimeout(this.afterMatchVoiceTimer);
+        this.afterMatchVoiceTimer = setTimeout(() => {
+            if (this.gameState === 'playing' || this.gameState === 'paused') return;
+            const text = window.gameLang === 'en' ? 'What a fluffy bunny, huh?' : 'Vilken lurvig kanin, va?';
+            this.audioSynth.readAloud(text, null, 'lurvig-kanin');
+        }, 1600);
+    }
+
+    // A normal match after a 2-player one: the result screens' own titles back
+    restoreResultTitles() {
+        // The Swedish texts, not what was on screen: in English that was the
+        // translation, which the language layer would then take for Swedish
+        const originals = {
+            'victory-screen': ['STRID VUNNEN!', 'Du förstörde motståndarens torn.'],
+            'game-over-screen': ['STRID FÖRLORAD', 'Ditt torn förstördes.']
+        };
+        Object.entries(originals).forEach(([id, [title, subtitle]]) => {
+            const screen = document.getElementById(id);
+            if (!screen || !screen.dataset.local2p) return;
+            delete screen.dataset.local2p;
+            screen.querySelector('h1').innerText = title;
+            screen.querySelector('.subtitle').innerText = subtitle;
+            const stats = screen.querySelector('.run-stats');
+            if (stats) stats.classList.remove('hidden');
+        });
+    }
+
+    // ---- Levels: every 50 waves a new level, harder with more obstacles ----
+    get currentLevel() { return levelForWave(this.upgradeMgr.state.highestWave || 1); }
+
+    setupLevel() {
+        const solo = !this.isMultiplayer && !this.teamLayout && !this.local2p && !(this.trailer && this.trailer.active);
+        this.matchLevel = solo ? this.currentLevel : 1;
+        // every level has its own floor
+        this.canvasCtrl.floorVariant = this.matchLevel > 1 ? this.matchLevel : 0;
+        this.levelArena = null;
+        if (this.matchLevel <= 1) return;
+        const arena = new LevelArena(this.matchLevel, this.canvasCtrl.width, this.canvasCtrl.height);
+        if (!arena.empty) this.levelArena = arena;
+        // a tougher computer: more health for its samurai and its tower
+        const boost = LevelArena.aiBoost(this.matchLevel);
+        this.enemy.maxHp = Math.round(this.enemy.maxHp * boost.hp);
+        this.enemy.hp = this.enemy.maxHp;
+        this.topTower.maxHp = Math.round(this.topTower.maxHp * boost.hp);
+        this.topTower.hp = this.topTower.maxHp;
+        // (the "LEVEL n" banner is shown when the match really starts, see
+        // showBossWarningBanner: shown here it ran out behind the perk
+        // screen, and picking a perk hid it at once)
+    }
+
+    showLevelBanner() {
+        const banner = document.getElementById('boss-warning');
+        if (!banner) return;
+        banner.innerText = `LEVEL ${this.matchLevel}`;
+        banner.style.color = '#ffcc00';
+        banner.classList.remove('hidden');
+        if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
+        this.bossWarningTimeout = setTimeout(() => { banner.classList.add('hidden'); banner.style.color = ''; }, 2200);
+    }
+
+    // Popups (new level, new rank, daily gift) come one at a time, never on top of each other
+    popupBusy() {
+        return ['stage-up', 'level-up', 'daily-gift'].some((id) => {
+            const el = document.getElementById(id);
+            return el && !el.classList.contains('hidden');
+        });
+    }
+
+    queuePopup(show) {
+        this.popupQueue = this.popupQueue || [];
+        if (this.popupBusy()) { this.popupQueue.push(show); return true; }
+        return false;
+    }
+
+    nextPopup() {
+        if (!this.popupQueue || !this.popupQueue.length) return;
+        // never over a match: wait until it is over
+        if (this.gameState === 'playing' || this.gameState === 'paused') {
+            setTimeout(() => this.nextPopup(), 1000);
+            return;
+        }
+        const next = this.popupQueue.shift();
+        setTimeout(next, 250);
+    }
+
+    showNewLevel(level) {
+        const box = document.getElementById('stage-up');
+        if (!box) return;
+        if (this.queuePopup(() => this.showNewLevel(level))) return;
+        document.getElementById('stage-up-title').innerText = `LEVEL ${level}`;
+        const news = level >= 7 ? 'Rullande stenblock, eldhål och stenpelare!' : level >= 4 ? 'Eldhål och stenpelare!' : 'Stenpelare på arenan!';
+        document.getElementById('stage-up-text').innerText = `Datorn blir tuffare. ${news}`;
+        box.classList.remove('hidden');
+        this.audioSynth.playGong();
+        this.settings.vibrate([100, 60, 100, 60, 300]);
+        document.getElementById('btn-stage-ok').onclick = () => {
+            this.audioSynth.playClick();
+            box.classList.add('hidden');
+            this.nextPopup();
+        };
+    }
+
+    // ---- Level and XP ----
+    // Every match gives experience; the level follows from it (level 2 at
+    // 100 XP, 3 at 400, 4 at 900...). Each new level gives Cyber-Credits.
+    static levelFor(xp) { return Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1; }
+    static xpForLevel(level) { return 100 * (level - 1) * (level - 1); }
+    static levelTitle(level) {
+        return level >= 12 ? 'SHOGUN' : level >= 8 ? 'MÄSTARE' : level >= 5 ? 'SAMURAJ' : level >= 3 ? 'KRIGARE' : 'LÄRLING';
+    }
+
+    awardXP(amount) {
+        if (this.trailer && this.trailer.active) return;
+        if (this.local2p) return; // 2 players on one phone: nothing recorded (its K.O.s either)
+        const st = this.upgradeMgr.state;
+        const before = Game.levelFor(st.xp || 0);
+        st.xp = (st.xp || 0) + amount;
+        const after = Game.levelFor(st.xp);
+        let reward = 0;
+        for (let l = before + 1; l <= after; l++) reward += 50 * l;
+        if (reward) this.upgradeMgr.addCredits(reward); // (addCredits saves; so does the match result)
+        else this.upgradeMgr.save();
+        this.updateLevelDisplay();
+        if (after > before) {
+            // A K.O. mid-match: the popup (over the whole screen) waits for the
+            // result screen instead of covering the arena while the fight goes on
+            const waiting = this.pendingLevelUp;
+            this.pendingLevelUp = { level: after, reward: reward + (waiting ? waiting.reward : 0) };
+        }
+        this.flushLevelUp();
+    }
+
+    flushLevelUp() {
+        const p = this.pendingLevelUp;
+        if (!p || this.gameState === 'playing' || this.gameState === 'paused') return;
+        this.pendingLevelUp = null;
+        this.showLevelUp(p.level, p.reward);
+    }
+
+    updateLevelDisplay() {
+        const stage = document.getElementById('stage-val');
+        if (stage) {
+            const wave = this.upgradeMgr.state.highestWave || 1;
+            const level = levelForWave(wave);
+            stage.innerText = level >= MAX_LEVEL ? `LEVEL ${level} · MAX`
+                : `LEVEL ${level} · VÅG ${wave - (level - 1) * WAVES_PER_LEVEL} AV ${WAVES_PER_LEVEL}`;
+        }
+        const xp = this.upgradeMgr.state.xp || 0;
+        const level = Game.levelFor(xp);
+        const label = document.getElementById('level-val');
+        const fill = document.getElementById('xp-fill');
+        if (label) label.innerText = `RANG ${level} · ${Game.levelTitle(level)}`;
+        if (fill) {
+            const from = Game.xpForLevel(level), to = Game.xpForLevel(level + 1);
+            fill.style.width = `${Math.round(100 * (xp - from) / (to - from))}%`;
+        }
+    }
+
+    showLevelUp(level, reward) {
+        const box = document.getElementById('level-up');
+        if (!box) return;
+        if (this.queuePopup(() => this.showLevelUp(level, reward))) return;
+        document.getElementById('level-up-title').innerText = `RANG ${level}`;
+        document.getElementById('level-up-reward').innerText = `${Game.levelTitle(level)} · +${reward} ⚡`;
+        box.classList.remove('hidden');
+        this.audioSynth.playUpgrade();
+        this.settings.vibrate([60, 40, 60, 40, 120]);
+        document.getElementById('btn-level-ok').onclick = () => {
+            this.audioSynth.playClick();
+            box.classList.add('hidden');
+            this.nextPopup();
+        };
+    }
+
+    // ---- Daily gift ----
+    // The first time the game is opened each day: a gift of Cyber-Credits,
+    // bigger for every day in a row (25, 35, 50, 70, then 100 a day).
+    checkDailyGift() {
+        const key = 'dangerous_fight_daily';
+        const d = new Date();
+        const today = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+        // (calendar yesterday, not now minus 24 h: that is wrong the night the clocks change)
+        const y = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+        const yesterday = `${y.getFullYear()}-${y.getMonth() + 1}-${y.getDate()}`;
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(key)); } catch (e) {}
+        if (saved && saved.date === today) return;
+        const streak = saved && saved.date === yesterday ? (saved.streak || 1) + 1 : 1;
+        const amounts = [25, 35, 50, 70, 100];
+        const amount = amounts[Math.min(streak, amounts.length) - 1];
+        document.getElementById('daily-gift-amount').innerText = amount;
+        document.getElementById('daily-gift-streak').innerText = streak > 1 ? `${streak} dagar i rad!` : 'Kom tillbaka i morgon för en större gåva!';
+        const box = document.getElementById('daily-gift');
+        if (this.queuePopup(() => this.checkDailyGift())) return;
+        box.classList.remove('hidden');
+        const claim = document.getElementById('btn-daily-claim');
+        claim.onclick = () => {
+            claim.onclick = null;
+            try { localStorage.setItem(key, JSON.stringify({ date: today, streak })); } catch (e) {}
+            this.upgradeMgr.addCredits(amount);
+            this.audioSynth.playUpgrade();
+            this.settings.vibrate(60);
+            box.classList.add('hidden');
+            this.nextPopup();
+        };
+    }
+
+    // ---- Combo: hits landed in quick succession ----
+    registerHit() {
+        if (this.trailer && this.trailer.active) return;
+        const now = performance.now();
+        this.combo = now - (this.lastHitAt || 0) < 2500 ? (this.combo || 0) + 1 : 1;
+        this.lastHitAt = now;
+        if (this.combo >= 2) {
+            const bonus = 50 * this.combo;
+            this.addScore(bonus, this.player.x, this.player.y - 60);
+            this.particles.spawnDamageText(this.player.x, this.player.y - 70, `COMBO x${this.combo}!`, '#ffcc00', 1.2 + Math.min(0.6, this.combo * 0.1));
+            this.addRage(4 * this.combo);
+        }
+    }
+
+    // ---- First-match hints ----
+    // Shown the first time someone plays against the computer, one at a
+    // time, each gone as soon as the player has done it.
+    static get TUTORIAL() {
+        return [
+            { text: 'Svep åt det håll du vill åka!', until: 'dash' },
+            { text: 'Stå still i din zon längst ner för att ladda energi ⚡', until: 'energy' },
+            { text: 'Tryck på SVÄRDSVÅG för att skjuta!', until: 'shot' },
+            { text: 'Ramma motståndarens torn för stor skada!', until: 'ram', maxMs: 12000 },
+            { text: 'Träffa för att fylla RASERI-mätaren – tryck när den lyser!', until: 'rage', maxMs: 7000 }
+        ];
+    }
+
+    startTutorial() {
+        let done = false;
+        try { done = localStorage.getItem('dangerous_fight_tutorial') === 'done'; } catch (e) {}
+        this.tutorial = !done && !this.isMultiplayer && !this.teamLayout && !this.local2p ? { step: 0, ms: 0 } : null;
+        const el = document.getElementById('tutorial-hint');
+        if (el) el.classList.add('hidden');
+    }
+
+    tutorialEvent(what) {
+        const t = this.tutorial;
+        if (!t) return;
+        const step = Game.TUTORIAL[t.step];
+        if (step && step.until === what) this.nextTutorialStep();
+    }
+
+    nextTutorialStep() {
+        const t = this.tutorial;
+        t.step++;
+        t.ms = 0;
+        if (t.step >= Game.TUTORIAL.length) {
+            this.tutorial = null;
+            try { localStorage.setItem('dangerous_fight_tutorial', 'done'); } catch (e) {}
+            const el = document.getElementById('tutorial-hint');
+            if (el) el.classList.add('hidden');
+        }
+    }
+
+    updateTutorial(dt) {
+        const t = this.tutorial;
+        const el = document.getElementById('tutorial-hint');
+        if (!t || !el || (this.trailer && this.trailer.active)) return;
+        const step = Game.TUTORIAL[t.step];
+        t.ms += dt;
+        if (step.until === 'energy' && this.player.energy > 0) { this.nextTutorialStep(); return; }
+        if (step.maxMs && t.ms > step.maxMs) { this.nextTutorialStep(); return; }
+        if (el.dataset.step !== String(t.step)) {
+            el.dataset.step = String(t.step);
+            el.innerText = step.text;
+        }
+        el.classList.remove('hidden');
+    }
+
+    // ---- Samurajraseri ----
+    // A meter that fills when my samurai lands blows; full, the RASERI button
+    // unleashes a ring of sword waves and 6 s of double damage. Matches against
+    // the computer only (online, the other side could not see it happen).
+    get rageActive() {
+        return this.gameState === 'playing' && performance.now() < (this.rageUntil || 0);
+    }
+
+    addRage(amount) {
+        if (this.isMultiplayer || this.local2p || this.rageActive) return;
+        this.rage = Math.min(100, (this.rage || 0) + amount);
+    }
+
+    activateRage() {
+        if (this.gameState !== 'playing' || this.isMultiplayer || (this.rage || 0) < 100) return;
+        const p = this.player;
+        if (p.state === 'dead') return;
+        this.rage = 0;
+        this.rageUntil = performance.now() + 6000;
+        for (let k = 0; k < 12; k++) {
+            const a = (k / 12) * Math.PI * 2;
+            this.spawnProjectile(p.x, p.y, Math.cos(a) * 0.55, Math.sin(a) * 0.55, 10, 'player', 'plasma');
+        }
+        this.particles.spawnShockwave(p.x, p.y, '#ff2020', 160);
+        this.particles.spawnShockwave(p.x, p.y, '#ffae00', 90);
+        this.canvasCtrl.flash('rgba(255, 20, 20, 0.5)', 350);
+        this.canvasCtrl.shake(16, 500);
+        this.audioSynth.playVoiceSubBassDrop();
+        this.audioSynth.playGong();
+        this.audioSynth.playSlash(p.activeWeaponKey);
+        this.particles.spawnDamageText(p.x, p.y - 40, 'SAMURAJRASERI!', '#ff3030', 1.6);
+        this.settings.vibrate([60, 40, 140]);
+        this.missions.track('rage');
+        this.tutorialEvent('rage');
+    }
+
+    drawRageAura() {
+        const ctx = this.canvasCtrl.ctx;
+        const p = this.player;
+        if (p.state === 'dead') return;
+        const t = performance.now();
+        const left = Math.max(0, (this.rageUntil - t) / 6000);
+        const r = (p.radius || 30) * (2 + 0.25 * Math.sin(t / 80));
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const g = ctx.createRadialGradient(p.x, p.y, r * 0.2, p.x, p.y, r);
+        g.addColorStop(0, `rgba(255, 60, 20, ${0.45 * (0.4 + 0.6 * left)})`);
+        g.addColorStop(0.6, `rgba(255, 20, 20, ${0.25 * (0.4 + 0.6 * left)})`);
+        g.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+        ctx.restore();
+        if (Math.random() < 0.5) this.particles.spawnDamageEmbers(p.x + (Math.random() - 0.5) * 30, p.y + (Math.random() - 0.5) * 30, '#ff4020');
+    }
+
+    // Fire, and count it for the missions when a shot actually went off
+    playerShoot() {
+        // the on-screen button can still be hit on the pause / result screens
+        if (this.gameState !== 'playing') return;
+        const energy = this.player.energy;
+        this.player.shoot();
+        if (this.player.energy < energy) {
+            this.missions.track('shot');
+            this.tutorialEvent('shot');
+        }
     }
 
     // ------------------------------------------------------------------
@@ -487,7 +1339,14 @@ class Game {
     }
 
     gamepadMenuNav(action) {
-        const screen = [...document.querySelectorAll('.overlay-screen')].find(el => !el.classList.contains('hidden'));
+        // The daily gift sits over the menu: steer it first, or A presses
+        // the menu buttons behind it and the gift stays up over the match
+        // (the level-up popup likewise, over the result screen)
+        const langBox = document.getElementById('lang-box');
+        const noLang = !langBox || langBox.classList.contains('hidden');
+        const popup = ['stage-up', 'level-up', 'daily-gift'].map(id => document.getElementById(id))
+            .find(el => el && !el.classList.contains('hidden') && noLang);
+        const screen = popup || [...document.querySelectorAll('.overlay-screen')].find(el => !el.classList.contains('hidden'));
         if (!screen) return;
         const items = this.gamepadFocusables(screen);
         if (!items.length) return;
@@ -499,17 +1358,32 @@ class Game {
         let idx = items.indexOf(this.gpFocusEl);
         if (idx < 0) idx = Math.min(this.gpFocusIdx || 0, items.length - 1);
 
+        // A volume slider in the settings: sideways moves the slider
+        const cur = items[idx];
+        if (cur && cur.type === 'range' && (action === 'left' || action === 'right')) {
+            if (action === 'right') cur.stepUp(); else cur.stepDown();
+            cur.dispatchEvent(new Event('input', { bubbles: true }));
+            cur.dispatchEvent(new Event('change', { bubbles: true }));
+            this.setGamepadFocus(cur, idx);
+            return;
+        }
+
         if (action === 'up' || action === 'left') {
             idx = (idx - 1 + items.length) % items.length;
         } else if (action === 'down' || action === 'right') {
             idx = (idx + 1) % items.length;
         } else if (action === 'confirm') {
             const el = items[idx];
-            if (el.tagName === 'INPUT') el.focus(); // Xbox Edge opens its on-screen keyboard
+            // Xbox Edge opens its on-screen keyboard for a text box; a
+            // checkbox (settings) is toggled like a button
+            if (el.tagName === 'INPUT' && el.type !== 'checkbox') el.focus();
             else el.click();
             return;
         } else if (action === 'back') {
-            const back = items.find(el => /back|menu|tillbaka|avbryt|huvudmeny/i.test(el.id + ' ' + (el.innerText || '')));
+            // (on the pause screen B carries on playing)
+            // a real back button first, so e.g. "join room menu" is not taken for "back"
+            const back = items.find(el => el.classList.contains('back-btn') || /-back$|^btn-resume$/.test(el.id)) ||
+                items.find(el => /back|menu|tillbaka|avbryt|huvudmeny|resume/i.test(el.id + ' ' + (el.innerText || '')));
             if (back) back.click();
             return;
         }
@@ -553,10 +1427,222 @@ class Game {
             .trim();
     }
 
+    renderHelperShop() {
+        this.uiCtrl.renderHelperShop(this.creditStore, HELPER_PACKS, HELPERS, (pack) => {
+            this.audioSynth.playClick();
+            if (this.creditStore.canBuy(pack)) this.creditStore.buy(pack);
+        });
+    }
+
+    renderCheatShop() {
+        this.uiCtrl.renderCheatShop(this.creditStore, CHEAT_PACKS, CHEATS, (pack, have) => {
+            this.audioSynth.playClick();
+            if (!have && this.creditStore.canBuy(pack)) this.creditStore.buy(pack);
+        });
+    }
+
+    // The fusk you own, as on/off switches on the perk screen (remembered)
+    renderCheatPicks() {
+        const box = document.getElementById('cheat-picks');
+        const row = document.getElementById('cheat-picks-row');
+        if (!box || !row) return;
+        const st = this.upgradeMgr.state;
+        const keys = Object.keys(CHEATS).filter((k) => st.cheats && st.cheats[k]);
+        box.classList.toggle('hidden', keys.length === 0);
+        row.innerHTML = '';
+        keys.forEach((k) => {
+            const b = document.createElement('button');
+            b.className = 'diff-btn cheat-chip' + (st.cheatsOn[k] ? ' selected' : '');
+            b.innerText = `${CHEATS[k].icon} ${CHEATS[k].name}`;
+            b.addEventListener('click', () => {
+                this.audioSynth.playClick();
+                st.cheatsOn[k] = !st.cheatsOn[k];
+                b.classList.toggle('selected', st.cheatsOn[k]);
+                this.upgradeMgr.save();
+            });
+            row.appendChild(b);
+        });
+    }
+
+    // The match starts: the fusk that is switched on works for this match
+    applyCheats() {
+        const st = this.upgradeMgr.state;
+        this.cheats = null;
+        // only a solo match against the computer (the trailer clicks a perk
+        // card itself and must not show the player's fusk)
+        if (this.isMultiplayer || this.teamLayout || this.local2p || (this.trailer && this.trailer.active)) return;
+        if (!st.cheats || !st.cheatsOn) return;
+        this.cheats = {};
+        Object.keys(CHEATS).forEach((k) => { if (st.cheats[k] && st.cheatsOn[k]) this.cheats[k] = true; });
+        const on = Object.keys(this.cheats);
+        if (!on.length) { this.cheats = null; return; }
+        if (this.cheats.energy) this.player.energy = 3;
+        if (this.cheats.freeze) this.cheatFreezeMs = 15000;
+        const p = this.player;
+        this.particles.spawnDamageText(p.x, p.y - 110, '😈 ' + on.map((k) => CHEATS[k].icon).join(' '), '#ff00aa', 1.4);
+    }
+
+    // The hjälpmedel you own, as switches on the perk screen
+    renderHelperPicks() {
+        const box = document.getElementById('helper-picks');
+        const row = document.getElementById('helper-picks-row');
+        if (!box || !row) return;
+        const owned = this.upgradeMgr.state.helpers || {};
+        this.helperPicks = this.helperPicks || {};
+        const keys = Object.keys(HELPERS).filter((k) => owned[k] > 0);
+        box.classList.toggle('hidden', keys.length === 0);
+        row.innerHTML = '';
+        keys.forEach((k) => {
+            const b = document.createElement('button');
+            b.className = 'diff-btn helper-chip' + (this.helperPicks[k] ? ' selected' : '');
+            b.innerText = `${HELPERS[k].icon} ${HELPERS[k].name} (${owned[k]})`;
+            b.addEventListener('click', () => {
+                this.audioSynth.playClick();
+                this.helperPicks[k] = !this.helperPicks[k];
+                b.classList.toggle('selected', !!this.helperPicks[k]);
+            });
+            row.appendChild(b);
+        });
+    }
+
+    // The match starts: use up the hjälpmedel that are switched on
+    applyHelpers() {
+        // only a solo match against the computer: the trailer clicks a perk
+        // card itself and must not use up the player's hjälpmedel
+        if (this.isMultiplayer || this.teamLayout || this.local2p || (this.trailer && this.trailer.active)) return;
+        const picks = this.helperPicks || {};
+        const p = this.player;
+        const used = [];
+        Object.keys(HELPERS).forEach((k) => {
+            if (!picks[k] || !this.upgradeMgr.useHelper(k)) return;
+            used.push(HELPERS[k].icon);
+            if (k === 'shield') this.towerShieldMs = 30000;
+            if (k === 'energy') p.energy = 3;
+            if (k === 'rage') this.rage = 100;
+            if (k === 'revive') this.fastRevive = true;
+        });
+        // switched off again when there are none left
+        Object.keys(picks).forEach((k) => { if (!(this.upgradeMgr.state.helpers[k] > 0)) picks[k] = false; });
+        if (used.length) {
+            this.particles.spawnDamageText(p.x, p.y - 70, used.join(' '), '#39ff14', 1.4);
+            this.audioSynth.playUpgrade();
+        }
+    }
+
+    renderCreditShop() {
+        this.uiCtrl.renderCreditShop(this.creditStore, CREDIT_PACKS, (pack) => {
+            if (!this.creditStore.canBuy(pack)) { this.audioSynth.playClick(); return; }
+            this.audioSynth.playClick();
+            this.creditStore.buy(pack);
+        });
+    }
+
+    // The extra samurai for sale: same warriors as the dojo
+    static get REINFORCEMENTS() {
+        return [
+            { key: 'katana', name: 'CYBER RONIN', kind: 'Medium', cost: 400, glow: 'cyan' },
+            { key: 'hammer', name: 'SHADOW NINJA', kind: 'Snabb', cost: 500, glow: 'orange' },
+            { key: 'blades', name: 'ARMORED SHOGUN', kind: 'Tung', cost: 700, glow: 'pink' },
+            { key: 'oni', name: 'ONI BERSERKER', kind: 'Brutal', cost: 800, glow: 'pink' }
+        ];
+    }
+
+    renderReinforcementShop() {
+        const state = this.upgradeMgr.state;
+        const grid = document.getElementById('reinforce-grid');
+        if (!grid) return;
+        const creditsEl = document.getElementById('credits-reinforce-val');
+        if (creditsEl) creditsEl.innerText = state.credits;
+        grid.innerHTML = '';
+        Game.REINFORCEMENTS.forEach((r) => {
+            const owned = !!state.reinforcements[r.key];
+            const picked = state.reinforcementPick === r.key;
+            const profile = this.player.profiles[r.key] || this.player.profiles.katana;
+            const card = document.createElement('div');
+            card.className = 'weapon-card' + (picked ? ' selected' : owned ? '' : ' locked');
+            card.innerHTML = `<div class="weapon-glow ${r.glow}"></div><h3></h3>
+                <div class="weapon-stats"><div class="stat-row">HP: <span></span></div></div>
+                <div class="weapon-cost"></div>`;
+            card.querySelector('h3').innerText = `${r.name} (${r.kind})`;
+            card.querySelector('.stat-row span').innerText = profile.baseHp;
+            card.querySelector('.weapon-cost').innerText = picked ? '✅ KOMMER VID HALVTID + 20 S KVAR'
+                : owned ? 'KÖPT – klicka för att välja'
+                : `Kostar ⚡ ${r.cost}`;
+            card.addEventListener('click', () => this.handleReinforcement(r));
+            grid.appendChild(card);
+        });
+    }
+
+    handleReinforcement(r) {
+        const state = this.upgradeMgr.state;
+        if (state.reinforcements[r.key]) {
+            state.reinforcementPick = r.key; // bought: this one comes
+            this.upgradeMgr.save();
+            this.audioSynth.playClick();
+        } else if (this.upgradeMgr.spendCredits(r.cost)) {
+            state.reinforcements[r.key] = true;
+            state.reinforcementPick = r.key;
+            this.upgradeMgr.save();
+            this.audioSynth.playUpgrade();
+        } else {
+            this.audioSynth.playClick();
+        }
+        this.renderReinforcementShop();
+    }
+
+    // In a match against the computer the samurai picked in the Extra samuraj
+    // shop jumps in on my side twice: at half time, and again with 20 s left.
+    // The 1v1 turns into a team match with those team mates (and no extra
+    // foes), so all the team code - AI targeting, collisions, shots, tower
+    // rams, the time-out rule - just works.
+    spawnReinforcement() {
+        this.reinforcementsArrived++;
+        const w = this.canvasCtrl.width;
+        const h = this.canvasCtrl.height;
+        // land on the side away from me and from the first reinforcement
+        const taken = [this.player.x, ...this.allies.map((a) => a.x)];
+        const x = [w * 0.2, w * 0.5, w * 0.8].sort((a, b) =>
+            Math.min(...taken.map((t) => Math.abs(t - b))) - Math.min(...taken.map((t) => Math.abs(t - a))))[0];
+        const pick = this.upgradeMgr.state.reinforcementPick || 'katana';
+        const ally = new Enemy(x, h - 120, this);
+        ally.game = this;
+        ally.side = 'bottom';
+        ally.resetForRun(false);
+        ally.setVehicleType(pick);
+        ally.maxHp = (this.player.profiles[pick] || this.player.profiles.katana).baseHp;
+        ally.hp = ally.maxHp;
+        ally.x = x;
+        ally.y = h - 120;
+        ally.angle = -Math.PI / 2;
+        ally.trailHistory = [];
+        ally.aiControlled = true;
+        ally.isRemote = false;
+        ally.color = this.player.color; // same colour as me: clearly on my side
+
+        this.teamMatch = true;
+        this.teamRamCooldowns = this.teamRamCooldowns || new Map();
+        this.allies = [...this.allies, ally];
+        this.foes = [];
+
+        this.particles.spawnShockwave(ally.x, ally.y, ally.color, 60);
+        this.canvasCtrl.flash('rgba(255, 255, 255, 0.25)', 250);
+        this.audioSynth.playUpgrade();
+        const banner = document.getElementById('boss-warning');
+        if (banner) {
+            banner.innerText = this.reinforcementsArrived === 1
+                ? 'FÖRSTÄRKNING! EN SAMURAJ HOPPAR IN I DITT LAG'
+                : '20 SEKUNDER KVAR! EN TILL SAMURAJ HOPPAR IN';
+            banner.style.color = '';
+            banner.classList.remove('hidden');
+            if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
+            this.bossWarningTimeout = setTimeout(() => banner.classList.add('hidden'), 3000);
+        }
+    }
+
     // Vehicle equip/unlock shop logic
     handleWeaponArsenal(weaponKey) {
         const state = this.upgradeMgr.state;
-        const costs = { katana: 0, blades: 100, hammer: 250 };
+        const costs = { katana: 0, blades: 100, hammer: 250, oni: 600 };
         const cost = costs[weaponKey];
         
         if (state.unlockedWeapons[weaponKey]) {
@@ -805,8 +1891,10 @@ class Game {
         if (this.gameState === 'playing') {
             this.gameState = 'gameover';
             this.audioSynth.stopMusic();
+            this.restoreResultTitles(); // (not "SPELARE 2 VANN!" from a 2-player match before)
             this.uiCtrl.renderGameOver(0, reason, this.currentScore || 0, this.matchKills || 0, false);
             this.uiCtrl.hidePodiumForms();
+            this.flushLevelUp(); // a level reached by a K.O. in this match
         } else if (wasMultiplayer && (this.gameState === 'gameover' || this.gameState === 'victory')) {
             const winnerEl = document.getElementById('stat-defeat-winner');
             if (winnerEl && this.gameState === 'gameover') winnerEl.innerText = reason;
@@ -861,6 +1949,11 @@ class Game {
 
     // Both players must press "Spela igen" before a rematch starts
     requestRestart() {
+        // (a plain startRun would turn the rematch into a match against the computer)
+        if (this.local2p) {
+            this.startLocal2p();
+            return;
+        }
         if (!this.isMultiplayer) {
             this.startRun();
             return;
@@ -989,7 +2082,8 @@ class Game {
                     statusEl.innerText = 'Motståndare hittad!';
                 }
                 this.audioSynth.playUpgrade();
-                setTimeout(() => this.setupMultiplayerClient(data.room, true), 150);
+                // Tracked so backing out during the hand-off cancels it
+                this.mmTimers.push(setTimeout(() => this.setupMultiplayerClient(data.room, true), 150));
             } else if (data.type === 'match_ack' && data.to === this.mmId && this.mmPending && data.id === this.mmPending.peer) {
                 this.mmMatched = true;
                 if (statusEl) {
@@ -998,7 +2092,7 @@ class Game {
                 }
                 this.audioSynth.playUpgrade();
                 const room = this.mmPending.room;
-                setTimeout(() => this.setupMultiplayerHost(room), 150);
+                this.mmTimers.push(setTimeout(() => this.setupMultiplayerHost(room), 150));
             }
         };
 
@@ -1160,21 +2254,60 @@ class Game {
             return;
         }
         if (this.isMultiplayer && which === 'top') return;
+        // the TORNSKÖLD hjälpmedel (for a while) and ODÖDLIGT TORN fusk: my tower takes nothing
+        if (which === 'bottom' && (this.towerShieldMs > 0 || (this.cheats && this.cheats.tower))) {
+            this.particles.spawnClashSparks(this.canvasCtrl.width / 2, this.canvasCtrl.height - 60, '#00f0ff');
+            return 'shielded';
+        }
         tower.hp = Math.max(0, tower.hp - amount);
     }
 
     // Triggered when starting a game
     startRun() {
+        // "Spela igen" pressed online and then left via Poängtavla -> back
+        // would otherwise stay greyed out ("VÄNTAR PÅ MOTSTÅNDARE...") after
+        // the next match
+        this.resetRestartButtons();
+        // 2 players on one phone: only the 2 SPELARE button asks for it
+        this.local2p = !!this.pendingLocal2p;
+        this.pendingLocal2p = false;
+        // hjälpmedel only last one match, and fusk is only switched on
+        // for a match against the computer (see applyCheats)
+        this.towerShieldMs = 0;
+        this.fastRevive = false;
+        this.cheats = null;
+        this.cheatFreezeMs = 0;
+        // a perk card still pending from an earlier solo start (its click acts
+        // 200 ms later) must not start this match, e.g. an online one
+        this.perkChoice = null;
+        this.finisher = null;
+        this.combo = 0;
+        this.lastHitAt = 0;
+        this.startTutorial();
+        this.rage = 0;
+        this.rageUntil = 0;
+        // the hurt buzz compares with the last frame: not the last match's
+        // samurai (a heavier one's hp would buzz on the first frame)
+        this.lastPlayerHp = undefined;
+        this.lastPlayerState = undefined;
         this.runCredits = 0;
         this.currentScore = 0;
         this.matchKills = 0;
         this.particles.clear();
         this.projectiles = [];
         this.slowMoTimer = 0; // reset slow motion
+        this.hitStopTimer = 0;
+        this.enemyRamCooldown = 0;
+        this.playerRamCooldown = 0;
+        this.remoteMeleeCooldown = 0;
         this.matchTimer = 240000; // 4 minutes match duration
+        // A bought reinforcement joins matches against the computer (a 1v1;
+        // team matches already have team mates, online has no one to run it)
+        this.reinforcementDue = !this.isMultiplayer && !this.teamLayout && !this.local2p && !!this.upgradeMgr.state.reinforcementPick;
+        this.reinforcementsArrived = 0;
         
         let isBoss = false;
-        if (!this.isMultiplayer) {
+        if (!this.isMultiplayer && !this.local2p) {
             // Increment match count
             this.upgradeMgr.state.matchCount = (this.upgradeMgr.state.matchCount || 0) + 1;
             this.upgradeMgr.save();
@@ -1199,6 +2332,10 @@ class Game {
         this.player.applyPermanentUpgrades(this.upgradeMgr.state.upgrades);
         this.player.resetForRun();
 
+        // Leaving a team match: restore the 1v1 world size BEFORE placing the
+        // cars, or they are placed in the zoomed-out arena and end up off-screen
+        if (!this.teamLayout) this.clearTeamMatch();
+
         // Both cars start the match at their own base, whatever happened last round
         const arenaW = this.canvasCtrl.width;
         const arenaH = this.canvasCtrl.height;
@@ -1214,6 +2351,7 @@ class Game {
         // Reset enemy car
         this.enemy.resetForRun(isBoss);
         if (isBoss) this.enemy.resetRagdollPositions();
+        this.setupLevel();
 
         if (this.isMultiplayer && !this.teamLayout) {
             // The enemy is a replica of the opponent: restore their vehicle
@@ -1234,15 +2372,20 @@ class Game {
         if (this.teamLayout) {
             this.setupTeamMatch(this.teamLayout);
             this.showTeamBanner();
-        } else {
-            this.clearTeamMatch();
         }
 
         // Offer cybernetic perks in single-player before entering battle
-        if (!this.isMultiplayer && !this.teamLayout) {
+        if (!this.isMultiplayer && !this.teamLayout && !this.local2p) {
             const randomPerks = this.upgradeMgr.getRandomPerks();
+            // A card acts 200 ms after its click: TILLBAKA pressed meanwhile
+            // (or a second tap on a card) must not start the match anyway
+            const perkChoice = this.perkChoice = {};
             this.uiCtrl.showScreen('perks');
+            this.renderHelperPicks();
+            this.renderCheatPicks();
             this.uiCtrl.renderPerkSelection(randomPerks, (perkKey) => {
+                if (this.perkChoice !== perkChoice) return;
+                this.perkChoice = null;
                 this.player.activePerk = perkKey;
                 if (perkKey === 'shieldCharge') {
                     this.player.shieldHp = 1;
@@ -1250,6 +2393,8 @@ class Game {
                 }
                 
                 // Complete game start after perk choice
+                this.applyHelpers();
+                this.applyCheats();
                 this.gameState = 'playing';
                 this.uiCtrl.showScreen('hud');
                 
@@ -1290,11 +2435,14 @@ class Game {
         if (warningBanner) {
             if (isBoss) {
                 warningBanner.innerText = "VARNING: SHOGUN DETEKTERAD! 💀";
+                warningBanner.style.color = ''; // the team banner may have tinted it
                 warningBanner.classList.remove('hidden');
                 if (this.bossWarningTimeout) clearTimeout(this.bossWarningTimeout);
                 this.bossWarningTimeout = setTimeout(() => {
                     warningBanner.classList.add('hidden');
                 }, 3000);
+            } else if ((this.matchLevel || 1) > 1) {
+                this.showLevelBanner();
             } else {
                 warningBanner.classList.add('hidden');
                 if (this.bossWarningTimeout) {
@@ -1321,6 +2469,10 @@ class Game {
     // Handler when enemy samurai is destroyed
     onEnemyDefeated(isBoss) {
         this.matchKills = (this.matchKills || 0) + 1;
+        this.missions.track('ko');
+        this.addRage(30);
+        this.awardXP(isBoss ? 60 : 20);
+        this.settings.vibrate(120);
         if (isBoss) {
             this.addScore(2000, this.enemy.x, this.enemy.y, 'BOSS K.O.!');
         } else {
@@ -1416,12 +2568,21 @@ class Game {
         }
 
         this.projectiles.push({
-            x, y, vx, vy, radius, owner, type, damageCar, damageTower, color
+            x, y, vx, vy, radius, owner, type, damageCar, damageTower, color, replicated
         });
     }
 
     // Main Engine updates (Physics & Collisions)
     update(dt) {
+        if (this.trailer && this.trailer.active) this.trailer.update(dt);
+        // The finishing moment is over: on to the result screen
+        if (this.finisher && performance.now() >= this.finisher.until) {
+            const win = this.finisher.win;
+            this.finisher = null;
+            if (this.gameState === 'playing') {
+                if (win) this.handleVictory(); else this.handleDefeat();
+            }
+        }
         if (this.gameState !== 'playing') {
             this.particles.spawnAmbience(this.canvasCtrl.width, this.canvasCtrl.height, 1);
             this.particles.update(dt);
@@ -1447,9 +2608,16 @@ class Game {
             }
         }
 
-        // 4-Minute Match Timer Countdown
-        if (this.gameState === 'playing') {
+        // 4-Minute Match Timer Countdown (stopped while the finisher plays:
+        // a timeout then would end the match again, maybe the other way)
+        if (this.gameState === 'playing' && !this.finisher) {
             this.matchTimer -= dt;
+            // The extra samurai bought in the shop: at half time, and one
+            // more with 20 seconds left
+            if (this.reinforcementDue) {
+                if (this.reinforcementsArrived < 1 && this.matchTimer <= 120000) this.spawnReinforcement();
+                else if (this.reinforcementsArrived < 2 && this.matchTimer <= 20000) this.spawnReinforcement();
+            }
             if (this.matchTimer <= 0) {
                 this.matchTimer = 0;
                 this.handleMatchTimeout();
@@ -1470,7 +2638,7 @@ class Game {
         const lavaMaxX = this.canvasCtrl.width - 80;
         const lavaCenterY = this.canvasCtrl.height / 2;
         
-        if (Math.random() < 0.035 && this.lavaBubbles.length < 9) {
+        if (Math.random() < 0.07 && this.lavaBubbles.length < 14) {
             this.lavaBubbles.push({
                 x: lavaMinX + 25 + Math.random() * (lavaMaxX - lavaMinX - 50),
                 y: lavaCenterY + (Math.random() - 0.5) * 32,
@@ -1490,18 +2658,32 @@ class Game {
             }
         }
 
-        // Drifting basalt / obsidian crust plates ride the current
         const riverLen = Math.max(1, lavaMaxX - lavaMinX);
-        this.lavaCrustPlates.forEach(plate => {
-            plate.u += (plate.vx * dt) / riverLen;
-            plate.angle += plate.rotSpeed * dt;
-            if (plate.u > 1.04) plate.u -= 1.08;
-        });
+
+        // Ash from the lava drifting down over the whole arena
+        if (Math.random() < dt * 0.006) this.particles.spawnAsh(this.canvasCtrl.width, this.canvasCtrl.height);
 
         // Constant trickle of embers and smoke rising off the magma
-        if (Math.random() < 0.35) {
+        if (Math.random() < 0.6) {
             const ex = lavaMinX + Math.random() * riverLen;
             this.particles.spawnDamageEmbers(ex, lavaCenterY + (Math.random() - 0.5) * 30, Math.random() < 0.5 ? '#ff7a00' : '#ffb830');
+        }
+
+        // Eruptions: every few seconds the lava throws up a fountain of
+        // molten drops somewhere along the river, with a flash of heat
+        this.nextEruption = (this.nextEruption === undefined ? 2500 : this.nextEruption) - dt;
+        if (this.nextEruption <= 0) {
+            this.nextEruption = 2500 + Math.random() * 4500;
+            const ex = lavaMinX + 40 + Math.random() * (riverLen - 80);
+            const ey = lavaCenterY + (Math.random() - 0.5) * 16;
+            for (let k = 0; k < 3; k++) this.particles.spawnLavaBurst(ex + (Math.random() - 0.5) * 18, ey);
+            this.particles.spawnLavaSplash(ex, ey, 0, -1);
+            this.eruptionGlow = { x: ex, y: ey, life: 700 };
+            this.audioSynth.playLavaBubblePop(0.3);
+        }
+        if (this.eruptionGlow) {
+            this.eruptionGlow.life -= dt;
+            if (this.eruptionGlow.life <= 0) this.eruptionGlow = null;
         }
 
         if (this.remoteMeleeCooldown > 0) this.remoteMeleeCooldown -= dt;
@@ -1516,8 +2698,45 @@ class Game {
             });
         }
         
+        // A sudden burst of speed is a dash: kick up dust behind it
+        [this.player, this.enemy, ...(this.teamMatch ? this.extraCars() : [])].forEach(c => {
+            if (!c || c.state === 'dead') return;
+            const sp = Math.hypot(c.vx || 0, c.vy || 0);
+            if (sp - (c.prevSpeed || 0) > 0.45) this.particles.spawnDust(c.x, c.y, -c.vx, -c.vy, 5);
+            c.prevSpeed = sp;
+        });
+
         this.updatePhysics(physicsDt);
+        if (this.levelArena) {
+            const cw = this.canvasCtrl.width, ch = this.canvasCtrl.height;
+            if (this.levelArena.width !== cw || this.levelArena.height !== ch) this.levelArena.resize(cw, ch);
+            this.levelArena.update(physicsDt, [this.player, this.enemy, ...(this.teamMatch ? this.extraCars() : [])], this);
+        }
         this.checkCollisions(physicsDt);
+
+        this.updateTutorial(dt);
+        if (this.towerShieldMs > 0) this.towerShieldMs = Math.max(0, this.towerShieldMs - dt);
+        if (this.cheats) {
+            // GUDSLÄGE also against lava and fire, OÄNDLIG ENERGI keeps the sword waves full
+            if (this.cheats.god && this.player.state !== 'dead') this.player.hp = this.player.maxHp;
+            if (this.cheats.energy) this.player.energy = 3;
+            // EVIGT RASERI: the meter is full again as soon as the rage is over
+            if (this.cheats.rage && !this.rageActive) this.rage = 100;
+            if (this.cheatFreezeMs > 0) this.cheatFreezeMs = Math.max(0, this.cheatFreezeMs - dt);
+        }
+        if (this.local2p) this.updateLocalTopPlayer(dt);
+
+        // Feel the hits: a buzz when my samurai loses health, a long one when it falls
+        const hp = this.player.hp;
+        if (this.lastPlayerHp !== undefined && !(this.trailer && this.trailer.active)) {
+            if (this.player.state === 'dead' && this.lastPlayerState !== 'dead') this.settings.vibrate(250);
+            else if (hp < this.lastPlayerHp - 4 && performance.now() - (this.lastHurtBuzz || 0) > 150) {
+                this.lastHurtBuzz = performance.now();
+                this.settings.vibrate(30);
+            }
+        }
+        this.lastPlayerHp = hp;
+        this.lastPlayerState = this.player.state;
         
         // Network Sync (~30 Hz; the replica dead-reckons between packets)
         if (this.teamNet) {
@@ -1560,7 +2779,13 @@ class Game {
             const myDamage = this.bottomTower.maxHp - this.bottomTower.hp;
             const theirDamage = this.topTower.maxHp - this.topTower.hp;
             this.particles.spawnDamageText(this.canvasCtrl.width / 2, this.canvasCtrl.height / 2, 'TIDEN UTE!', '#ffcc00', 2.0);
-            this.declareTeamEnd(theirDamage >= myDamage ? this.teamNet.myTeam : this.otherTeam());
+            let myTeamWins = theirDamage > myDamage;
+            if (theirDamage === myDamage) {
+                // Equal tower damage: the team whose samurai took the least damage wins
+                const carDamage = (cars) => cars.reduce((sum, c) => sum + (c ? Math.max(0, c.maxHp - c.hp) : 0), 0);
+                myTeamWins = carDamage(this.foeTeamCars()) >= carDamage(this.myTeamCars());
+            }
+            this.declareTeamEnd(myTeamWins ? this.teamNet.myTeam : this.otherTeam());
             return;
         }
         if (this.isMultiplayer && this.isClient) return;
@@ -1580,8 +2805,10 @@ class Game {
             iWin = false;
         } else {
             // Equal tower damage, compare samurai car damage taken
-            const playerCarDamage = this.player.maxHp - this.player.hp;
-            const enemyCarDamage = this.enemy.maxHp - this.enemy.hp;
+            // (a whole team each in an offline team match)
+            const carDamage = (cars) => cars.reduce((sum, c) => sum + (c ? Math.max(0, c.maxHp - c.hp) : 0), 0);
+            const playerCarDamage = carDamage(this.teamMatch ? this.myTeamCars() : [this.player]);
+            const enemyCarDamage = carDamage(this.teamMatch ? this.foeTeamCars() : [this.enemy]);
             iWin = enemyCarDamage >= playerCarDamage;
         }
         this.declareMatchEnd(iWin);
@@ -1600,7 +2827,9 @@ class Game {
         const lavaDamagePerMs = 0.025; // 25 HP per second
 
         // Check player car in lava
-        if (this.player.x > lavaMinX && this.player.x < lavaMaxX && this.player.y > lavaMinY && this.player.y < lavaMaxY && this.player.state !== 'dead') {
+        // (LAVASKOR fusk: my samurai walks straight through)
+        if (this.player.x > lavaMinX && this.player.x < lavaMaxX && this.player.y > lavaMinY && this.player.y < lavaMaxY && this.player.state !== 'dead' &&
+            !(this.cheats && this.cheats.lava)) {
             this.player.hp = Math.max(0, this.player.hp - lavaDamagePerMs * dt);
             
             // Viscous fluid drag & thermal buoyant kick
@@ -1647,18 +2876,25 @@ class Game {
         // --- 2. ONE-WAY PASSAGE GATES ---
         // Left Passage (x < 80): ONLY UPWARDS movement allowed.
         // Symmetrically, if moving downwards (vy > 0), block at y = h/2.
+        // The boss ragdoll: bounce every limb too, or the ones still moving
+        // drag the torso through the gate (the torso follows obj.y itself)
+        const bounceLimbs = (obj) => {
+            if (obj.ragdollNodes) obj.ragdollNodes.forEach(node => { node.vy = obj.vy; });
+        };
         const blockCheck = (obj) => {
             if (obj.x < 80) {
                 // Left side: going down is blocked
                 if (obj.vy > 0 && obj.y - obj.radius < h / 2 + 10 && obj.y + obj.radius > h / 2 - 10) {
                     obj.y = h / 2 - obj.radius - 2;
                     obj.vy = -obj.vy * 0.4; // slight bounce back
+                    bounceLimbs(obj);
                 }
             } else if (obj.x > w - 80) {
                 // Right side: going up is blocked
                 if (obj.vy < 0 && obj.y - obj.radius < h / 2 + 10 && obj.y + obj.radius > h / 2 - 10) {
                     obj.y = h / 2 + obj.radius + 2;
                     obj.vy = -obj.vy * 0.4;
+                    bounceLimbs(obj);
                 }
             }
         };
@@ -1676,9 +2912,35 @@ class Game {
         // --- 3. PROJECTILES PHYSICS ---
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p = this.projectiles[i];
-            
+
+            // MÅLSÖKANDE SVÄRDSVÅGOR (fusk): my shots turn towards the computer's samurai
+            if (p.owner === 'player' && this.cheats && this.cheats.homing && this.enemy.state !== 'dead') {
+                const speed = Math.hypot(p.vx, p.vy);
+                const want = Math.atan2(this.enemy.y - p.y, this.enemy.x - p.x);
+                const cur = Math.atan2(p.vy, p.vx);
+                let turn = want - cur;
+                while (turn > Math.PI) turn -= Math.PI * 2;
+                while (turn < -Math.PI) turn += Math.PI * 2;
+                // Turn harder the closer it gets: with a fixed turn rate the
+                // turning circle (0.45 px/ms / 0.005 = 90 px, a sniper shot
+                // ~200 px) is wider than the hit radius, and a shot that just
+                // missed circled a standing (e.g. frozen) samurai forever
+                // (shots only disappear on a hit)
+                const dist = Math.hypot(this.enemy.x - p.x, this.enemy.y - p.y);
+                const maxTurn = Math.max(0.005 * dt, speed * dt / Math.max(12, dist * 0.4));
+                const a = cur + Math.max(-maxTurn, Math.min(maxTurn, turn));
+                p.vx = Math.cos(a) * speed;
+                p.vy = Math.sin(a) * speed;
+            }
+
             p.x += p.vx * dt;
             p.y += p.vy * dt;
+            if (this.levelArena && this.levelArena.blocksShot(p)) {
+                this.particles.spawnStoneChips(p.x, p.y, 3);
+                this.particles.spawnClashSparks(p.x, p.y, '#ffffff');
+                this.projectiles.splice(i, 1);
+                continue;
+            }
             
             // Wall bounce (left/right walls)
             if (p.x < p.radius) {
@@ -1728,11 +2990,14 @@ class Game {
             // A shot never damages the shooter's own tower (it just bounces on)
             if (p.owner === 'enemy') hitTopTower = false;
             if (p.owner === 'player') hitBottomTower = false;
-            
+            // Team match: every screen sees every shot, but only the machine
+            // that fired it may count its tower damage (else it is multiplied)
+            const countsTower = !(this.teamNet && p.replicated);
+
             if (hitTopTower) {
                 // Damage top tower (each technique has its own tower damage)
                 const towerDmg = p.damageTower || 50;
-                this.damageTower('top', towerDmg);
+                if (countsTower) this.damageTower('top', towerDmg);
                 if (p.owner === 'player') {
                     this.addScore(Math.round(towerDmg), p.x, p.y);
                 }
@@ -1750,9 +3015,9 @@ class Game {
             } else if (hitBottomTower) {
                 // Damage bottom tower
                 const towerDmg = p.damageTower || 50;
-                this.damageTower('bottom', towerDmg);
+                const shielded = countsTower && this.damageTower('bottom', towerDmg) === 'shielded';
                 this.hitStopTimer = 25; // hit-stop micro freeze
-                this.particles.spawnDamageText(p.x, p.y, `-${towerDmg}`, '#00f0ff', 1.25);
+                this.particles.spawnDamageText(p.x, p.y, shielded ? 'SKÖLD!' : `-${towerDmg}`, '#00f0ff', 1.25);
                 this.particles.addDecal(p.x, p.y, 28, 'rgba(0,0,0,0.7)', 'scorch');
                 this.particles.spawnShockwave(p.x, p.y, '#00f0ff', 45);
                 this.canvasCtrl.addFloorPulse(p.x, p.y, '#00f0ff', 180);
@@ -1776,6 +3041,9 @@ class Game {
                     this.canvasCtrl.flash('rgba(255, 255, 255, 0.4)', 150);
                     this.canvasCtrl.shake(7, 120);
                     this.audioSynth.playParry();
+                    this.missions.track('parry');
+                    this.addRage(20);
+                    this.settings.vibrate(40);
                     
                     // Vampirism Perk Heal
                     if (this.player.activePerk === 'vampirism') {
@@ -1794,7 +3062,16 @@ class Game {
                     p.color = '#00f0ff'; // change laser color to player cyan!
 
                     // Opponent must see (and be hit by) the reflected shot
-                    if (this.isMultiplayer) {
+                    p.replicated = false; // it is my shot now
+                    if (this.teamNet) {
+                        const m = this.teamMirror({ x: p.x, y: p.y, vx: p.vx, vy: p.vy });
+                        this.sendNetworkPacket({
+                            type: 'tshot',
+                            team: this.teamNet.myTeam,
+                            x: m.x, y: m.y, vx: m.vx, vy: m.vy,
+                            radius: p.radius, cannonType: p.type
+                        });
+                    } else if (this.isMultiplayer) {
                         this.sendNetworkPacket({
                             type: 'projectile_fired',
                             x: p.x, y: p.y, vx: p.vx, vy: p.vy, radius: p.radius, cannonType: p.type
@@ -1834,6 +3111,8 @@ class Game {
                     this.enemy.takeDamage(p.damageCar, p.x, p.y, this.particles, this.canvasCtrl);
                     if (p.owner === 'player') {
                         this.addScore(Math.round(p.damageCar || 25), p.x, p.y);
+                        this.addRage(6);
+                        this.registerHit();
                     }
                     this.projectiles.splice(i, 1);
                     continue;
@@ -1845,9 +3124,10 @@ class Game {
     checkCollisions(dt) {
         const w = this.canvasCtrl.width;
         const h = this.canvasCtrl.height;
+        // Team clashes first: a samurai they kill must not clash or ram below
+        if (this.teamMatch) this.checkTeamCollisions(dt);
         const playerAlive = this.player.state !== 'dead';
         const enemyAlive = this.enemy.state !== 'dead';
-        if (this.teamMatch) this.checkTeamCollisions(dt);
 
         // --- 1. SAMURAI-TO-SAMURAI ELASTIC COLLISION ---
         if (!playerAlive || !enemyAlive) {
@@ -1887,7 +3167,7 @@ class Game {
                         const playerDashSpeed = Math.hypot(this.player.vx, this.player.vy);
                         if (playerDashSpeed > 0.08) {
                             const slashDmg = Math.floor((this.player.profile?.ramDamage || 100) * 0.5);
-                            this.enemy.takeDamage(slashDmg, this.player.x, this.player.y, this.particles, this.canvasCtrl);
+                            this.enemy.takeDamage(slashDmg, this.player.x, this.player.y, this.particles, this.canvasCtrl); this.registerHit();
                             this.addScore(slashDmg * 2, (this.player.x + node.x) / 2, (this.player.y + node.y) / 2, 'SLASH!');
                         }
                     }
@@ -1939,7 +3219,7 @@ class Game {
                     const playerDashSpeed = this.isMultiplayer ? prePlayerSpeed : Math.hypot(this.player.vx, this.player.vy);
                     if (playerDashSpeed > 0.08) {
                         const slashDmg = Math.floor((this.player.profile?.ramDamage || 100) * 0.5);
-                        this.enemy.takeDamage(slashDmg, this.player.x, this.player.y, this.particles, this.canvasCtrl);
+                        this.enemy.takeDamage(slashDmg, this.player.x, this.player.y, this.particles, this.canvasCtrl); this.registerHit();
                         this.addScore(slashDmg * 2, (this.player.x + this.enemy.x) / 2, (this.player.y + this.enemy.y) / 2, 'SLASH!');
                     }
 
@@ -1987,6 +3267,12 @@ class Game {
                     
                     this.hitStopTimer = 50; // Massive tower ram freeze frame!
                     this.particles.spawnDamageText(this.player.x, 70, `RAM! -${ramDmg}`, '#ff0077', 1.4);
+                    this.rubble(this.player.x, 80, 0, 1);
+                    this.missions.track('ram');
+                    this.addRage(25);
+                    this.registerHit();
+                    this.tutorialEvent('ram');
+                    this.settings.vibrate(80);
                     this.particles.addDecal(this.player.x, 80, 45, 'rgba(0,0,0,0.8)', 'scorch');
 
                     this.player.vy = 0.28;
@@ -2037,10 +3323,12 @@ class Game {
             if (impactForce > 0.05 && this.enemyRamCooldown <= 0) {
                 this.enemyRamCooldown = this.enemy.isBoss ? 1500 : 800;
                 const ramDmg = this.enemy.isBoss ? 150 : (this.player.profiles[this.enemy.activeWeaponKey]?.ramDamage || 100);
-                this.damageTower('bottom', ramDmg);
-                
+                // Team match: a replica's ram is counted by the machine that owns it
+                const shielded = !(this.teamNet && this.enemy.isRemote) && this.damageTower('bottom', ramDmg) === 'shielded';
+
                 this.hitStopTimer = 50; // Massive tower ram freeze frame!
-                this.particles.spawnDamageText(hittingNode.x, h - 70, `RAM! -${ramDmg}`, '#00f0ff', 1.4);
+                this.particles.spawnDamageText(hittingNode.x, h - 70, shielded ? 'SKÖLD!' : `RAM! -${ramDmg}`, '#00f0ff', 1.4);
+                this.rubble(hittingNode.x, h - 80, 0, -1);
                 this.particles.addDecal(hittingNode.x, h - 80, 45, 'rgba(0,0,0,0.8)', 'scorch');
 
                 if (this.enemy.isBoss && this.enemy.ragdollNodes) {
@@ -2053,7 +3341,7 @@ class Game {
                     this.enemy.y = h - 88;
                 }
                 
-                this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl);
+                this.enemy.takeDamage(30, hittingNode.x, h - 70, this.particles, this.canvasCtrl, true);
                 
                 this.particles.spawnShockwave(hittingNode.x, h - 85, this.enemy.color, 80);
                 this.canvasCtrl.addFloorPulse(hittingNode.x, h - 85, '#00f0ff', 220);
@@ -2068,6 +3356,7 @@ class Game {
 
     checkWinCondition() {
         if (this.gameState !== 'playing') return;
+        if (this.trailer && this.trailer.active) return; // nobody wins in the trailer
         if (this.teamNet) {
             if (!this.teamNet.isHost) return; // the host owns both towers
             if (this.topTower.hp <= 0) this.declareTeamEnd(this.teamNet.myTeam);
@@ -2080,16 +3369,40 @@ class Game {
             if (this.bottomTower.hp <= 0) this.declareMatchEnd(false);
             return;
         }
+        if (this.finisher) return; // the finishing moment is already playing
         if (this.topTower.hp <= 0) {
-            // Player Wins!
-            this.handleVictory();
+            // Player Wins! (after a moment of slow motion)
+            this.startFinisher(true);
         } else if (this.bottomTower.hp <= 0) {
             // Player Loses!
-            this.handleDefeat();
+            this.startFinisher(false);
         }
     }
 
+    // The tower falls: 1.5 s of slow motion, a flash, a shock wave and a
+    // thunderclap before the result screen, like the final blow in a
+    // fighting game. Matches against the computer only.
+    startFinisher(win) {
+        const w = this.canvasCtrl.width, h = this.canvasCtrl.height;
+        this.finisher = { win, until: performance.now() + 1500 };
+        this.slowMoTimer = 1500;
+        const x = w / 2, y = win ? 70 : h - 70;
+        this.particles.spawnShockwave(x, y, win ? '#00f0ff' : '#ff0055', 220);
+        this.particles.spawnShockwave(x, y, '#ffffff', 120);
+        this.rubble(x, y, 0, win ? 1 : -1);
+        this.rubble(x + 40, y, 0, win ? 1 : -1);
+        this.canvasCtrl.flash('rgba(255, 255, 255, 0.7)', 400);
+        this.canvasCtrl.shake(20, 900);
+        this.audioSynth.playVoiceSubBassDrop();
+        // 2 players on one phone: "your tower" would only be true for the bottom player
+        const text = this.local2p ? (win ? 'SPELARE 1 VANN!' : 'SPELARE 2 VANN!') : (win ? 'TORNET FÖLL!' : 'DITT TORN FÖLL!');
+        this.particles.spawnDamageText(w / 2, h / 2, text, win ? '#00f0ff' : '#ff0055', 2.2);
+        this.settings.vibrate(win ? [120, 60, 120, 60, 250] : [400]);
+    }
+
     handleVictory() {
+        if (this.local2p) { this.handleLocal2pEnd(true); return; }
+        this.restoreResultTitles();
         this.gameState = 'victory';
         
         const isBoss = !this.isMultiplayer && this.isHardBossRound;
@@ -2118,17 +3431,35 @@ class Game {
         // Award credits (multiplied by hacker level)
         const creditUpgradeModifier = 1 + (this.upgradeMgr.state.upgrades.credits || 0) * 0.2; // up to +100% credits
         const baseAward = isBoss ? 120 : 60;
-        const rewardCredits = Math.floor(baseAward * creditUpgradeModifier);
+        // DUBBLA CREDITS (fusk)
+        const cheatCredits = this.cheats && this.cheats.credits ? 2 : 1;
+        const rewardCredits = Math.floor(baseAward * creditUpgradeModifier) * cheatCredits;
         
         this.upgradeMgr.addCredits(rewardCredits);
+        const levelBefore = levelForWave(this.upgradeMgr.state.highestWave || 1);
         this.upgradeMgr.recordHighestWave(currentWave + 1);
-        
+        // the main menu's "HÖGSTA VÅG" was only ever set at start-up
+        this.uiCtrl.highestWaveVal.innerText = this.upgradeMgr.state.highestWave;
+        const levelAfter = levelForWave(this.upgradeMgr.state.highestWave || 1);
+        if (levelAfter > levelBefore && !this.isMultiplayer) this.showNewLevel(levelAfter);
+
+        this.awardXP(isBoss ? 200 : 100);
+        this.missions.track('matchEnd');
+        if (this.isMultiplayer) this.missions.track('onlineMatch');
+        else this.missions.track('win');
+        if (isBoss) this.missions.track('bossWin');
+        if (this.teamLayout) this.missions.track('teamWin');
+        this.settings.vibrate([80, 60, 200]);
+
         this.uiCtrl.renderVictory(rewardCredits, isBoss, finalScore, this.matchKills || 0, resultStats.isNewHighScore);
         this.offerPodiumName('victory', resultStats);
         this.audioSynth.playVictory();
+        this.sayAfterMatch();
     }
 
     handleDefeat() {
+        if (this.local2p) { this.handleLocal2pEnd(false); return; }
+        this.restoreResultTitles();
         this.gameState = 'gameover';
         
         const finalScore = this.currentScore || 0;
@@ -2142,13 +3473,19 @@ class Game {
             kills: this.matchKills || 0
         });
 
-        // Suffer partial credit loss/award
-        const rewardCredits = 10;
+        // Suffer partial credit loss/award (twice as much with DUBBLA CREDITS)
+        const rewardCredits = this.cheats && this.cheats.credits ? 20 : 10;
         this.upgradeMgr.addCredits(rewardCredits);
         
+        this.awardXP(40);
+        this.missions.track('matchEnd');
+        if (this.isMultiplayer) this.missions.track('onlineMatch');
+        this.settings.vibrate(300);
+
         this.uiCtrl.renderGameOver(rewardCredits, this.isMultiplayer ? 'Motståndaren' : 'Datorn', finalScore, this.matchKills || 0, resultStats.isNewHighScore);
         this.offerPodiumName('defeat', resultStats);
         this.audioSynth.playDefeat();
+        this.sayAfterMatch();
     }
 
     // A top-3 placement on the leaderboard lets the player sign the entry
@@ -2171,10 +3508,11 @@ class Game {
         // Apply camera screen shake translations
         this.canvasCtrl.applyTransformations();
         
-        // Draw one-way gate visual effects and lava barrier only when in active playing state!
-        if (this.gameState === 'playing') {
+        // Draw one-way gate visual effects and lava barrier only in a match (also paused)
+        if (this.gameState === 'playing' || this.gameState === 'paused') {
             this.drawOneWayGates();
             this.drawLavaBarrier();
+            if (this.levelArena) this.levelArena.draw(this.canvasCtrl.ctx);
         }
 
         // Draw glowing particles
@@ -2194,26 +3532,119 @@ class Game {
         }
 
         // Draw Entities
-        if (this.gameState === 'playing' || this.gameState === 'gameover' || this.gameState === 'victory') {
+        if (this.gameState === 'playing' || this.gameState === 'paused' || this.gameState === 'gameover' || this.gameState === 'victory') {
             // Towers first so a car parked at its base is never hidden behind it
             this.drawTowers();
             this.player.draw(this.canvasCtrl.ctx, this.canvasCtrl);
             this.enemy.draw(this.canvasCtrl.ctx, this.canvasCtrl);
+            // FRYST DATOR: the computer's samurai sits in a block of ice
+            if (this.cheatFreezeMs > 0 && this.enemy.state !== 'dead') {
+                const ctx = this.canvasCtrl.ctx, e = this.enemy;
+                const r = (e.radius || 34) + 14;
+                ctx.save();
+                ctx.globalAlpha = Math.min(1, this.cheatFreezeMs / 1000) * 0.85;
+                ctx.fillStyle = 'rgba(160, 220, 255, 0.28)';
+                ctx.strokeStyle = 'rgba(210, 245, 255, 0.9)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                for (let k = 0; k < 6; k++) {
+                    const ang = k * Math.PI / 3 + Math.PI / 6;
+                    const px = e.x + Math.cos(ang) * r, py = e.y + Math.sin(ang) * r;
+                    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
             if (this.teamMatch) {
                 this.extraCars().forEach(car => car.draw(this.canvasCtrl.ctx, this.canvasCtrl));
             }
+            if (this.rageActive) this.drawRageAura();
+
+            // Light and shade over the whole arena, then the lava's glow on
+            // whoever is standing close to it
+            const fighters = [this.player, this.enemy, ...(this.teamMatch ? this.extraCars() : [])]
+                .filter(c => c && c.state !== 'dead');
+            this.canvasCtrl.drawLighting(fighters.map(c => ({ x: c.x, y: c.y, r: (c.radius || 30) * 3 })));
+            this.drawLavaLightOn(fighters);
         }
-        
+
         // Restore matrix
         this.canvasCtrl.restoreTransformations();
 
         // 6. Draw cinematic vignette around arena borders
         this.canvasCtrl.drawVignette();
+
+        // Trailer bars, captions and title card over everything
+        if (this.trailer && this.trailer.active) {
+            this.trailer.draw(this.canvasCtrl.ctx, this.canvasCtrl.width, this.canvasCtrl.height);
+            this.trailer.copyFrame();
+        }
         
+        // The RASERI button with its meter (matches against the computer)
+        const rageBtn = this.rageBtn || (this.rageBtn = document.getElementById('rage-btn'));
+        if (rageBtn) {
+            const show = this.gameState === 'playing' && !this.isMultiplayer && !this.local2p;
+            if (rageBtn.classList.contains('hidden') === show) rageBtn.classList.toggle('hidden', !show);
+            if (show) {
+                const level = this.rageActive ? 100 : Math.round(this.rage || 0);
+                if (level !== this.shownRage) {
+                    this.shownRage = level;
+                    rageBtn.style.setProperty('--rage', level);
+                }
+                const ready = !this.rageActive && (this.rage || 0) >= 100;
+                if (rageBtn.classList.contains('ready') !== ready) rageBtn.classList.toggle('ready', ready);
+            }
+        }
+
+        // The top player's fire button (2 players on one phone)
+        const shoot2 = this.shootBtn2 || (this.shootBtn2 = document.getElementById('shoot-btn-2'));
+        if (shoot2) {
+            const show2 = this.gameState === 'playing' && this.local2p;
+            if (shoot2.classList.contains('hidden') === show2) shoot2.classList.toggle('hidden', !show2);
+        }
+
+        // The pause button: only in matches against the computer
+        const pauseBtn = this.pauseBtn || (this.pauseBtn = document.getElementById('btn-pause'));
+        if (pauseBtn) {
+            const canPause = this.gameState === 'playing' && !this.isMultiplayer && !this.finisher && !(this.trailer && this.trailer.active);
+            if (pauseBtn.classList.contains('hidden') === canPause) pauseBtn.classList.toggle('hidden', !canPause);
+        }
+
         // UI Hud updates
         if (this.gameState === 'playing') {
             this.uiCtrl.updateHUD(this.player, this.enemy, this.isMultiplayer, this.isClient, this.matchTimer, this.currentScore, this.matchKills, this);
         }
+    }
+
+    // Warm, flickering light from the lava falling on fighters near it
+    drawLavaLightOn(fighters) {
+        const ctx = this.canvasCtrl.ctx;
+        const centerY = this.canvasCtrl.height / 2;
+        const flicker = 0.85 + 0.15 * Math.sin(this.lavaTime * 9) * Math.sin(this.lavaTime * 5.3);
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        fighters.forEach(c => {
+            const d = Math.abs(c.y - centerY);
+            if (d > 150) return;
+            const a = (1 - d / 150) * 0.32 * flicker;
+            const r = (c.radius || 30) * 1.7;
+            // lit from the lava side
+            const lx = c.x, ly = c.y + (c.y < centerY ? r * 0.35 : -r * 0.35);
+            const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, r);
+            g.addColorStop(0, `rgba(255, 110, 20, ${a})`);
+            g.addColorStop(1, 'rgba(255, 60, 0, 0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(lx - r, ly - r, r * 2, r * 2);
+        });
+        ctx.restore();
+    }
+
+    // Stone chips and dust where something heavy hits the floor
+    rubble(x, y, dirX = 0, dirY = 0) {
+        this.particles.spawnStoneChips(x, y, 10, dirX, dirY);
+        this.particles.spawnDust(x, y, dirX, dirY, 6);
     }
 
     drawLavaBarrier() {
@@ -2226,33 +3657,59 @@ class Game {
         const lavaWidth = lavaMaxX - lavaMinX;
         const halfThick = 25;
         const t = this.lavaTime;
-        const flow = t * 55; // horizontal drift of the current, in px
+        const flow = t * 75; // horizontal drift of the current, in px
 
         ctx.save();
 
-        // 1. FLOOR GLOW: pulsing heat bands plus roaming hot spots cast on the stone
+        // 1. FLOOR GLOW: the heat lights up the stone around the river, fading
+        //    out softly in every direction (no hard edges where it ends)
         const heatPulse = 1.0 + Math.sin(t * 3.5) * 0.12;
-        const heatGradTop = ctx.createLinearGradient(0, centerY - halfThick - 60, 0, centerY - halfThick);
-        heatGradTop.addColorStop(0, 'rgba(255, 60, 0, 0)');
-        heatGradTop.addColorStop(1, `rgba(255, 80, 0, ${0.38 * heatPulse})`);
-        ctx.fillStyle = heatGradTop;
-        ctx.fillRect(lavaMinX - 14, centerY - halfThick - 60, lavaWidth + 28, 60);
+        ctx.save();
+        ctx.translate(lavaMinX + lavaWidth / 2, centerY);
+        ctx.scale(lavaWidth / 2 + 50, halfThick + 70);
+        const heatGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        heatGlow.addColorStop(0, `rgba(255, 95, 0, ${0.55 * heatPulse})`);
+        heatGlow.addColorStop(0.45, `rgba(255, 70, 0, ${0.32 * heatPulse})`);
+        heatGlow.addColorStop(1, 'rgba(255, 50, 0, 0)');
+        ctx.fillStyle = heatGlow;
+        ctx.fillRect(-1, -1, 2, 2);
+        ctx.restore();
 
-        const heatGradBottom = ctx.createLinearGradient(0, centerY + halfThick, 0, centerY + halfThick + 60);
-        heatGradBottom.addColorStop(0, `rgba(255, 80, 0, ${0.38 * heatPulse})`);
-        heatGradBottom.addColorStop(1, 'rgba(255, 60, 0, 0)');
-        ctx.fillStyle = heatGradBottom;
-        ctx.fillRect(lavaMinX - 14, centerY + halfThick, lavaWidth + 28, 60);
+        // An eruption lights up the floor around it for a moment
+        if (this.eruptionGlow) {
+            const e = this.eruptionGlow;
+            const k = e.life / 700;
+            const r = 90 + (1 - k) * 60;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const eg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r);
+            eg.addColorStop(0, `rgba(255, 170, 40, ${0.55 * k})`);
+            eg.addColorStop(0.4, `rgba(255, 90, 0, ${0.3 * k})`);
+            eg.addColorStop(1, 'rgba(255, 60, 0, 0)');
+            ctx.fillStyle = eg;
+            ctx.fillRect(e.x - r, e.y - r, r * 2, r * 2);
+            ctx.restore();
+        }
 
-        // 2. RIVER OUTLINE - two undulating shores (kept for the shoreline pass below)
-        const steps = 48;
+        // 2. RIVER OUTLINE - two irregular shores: rocky and uneven along the
+        //    length, with only a slight slow swell over time
+        const steps = 64;
         const dx = lavaWidth / steps;
+        const shore = (x, side) =>
+            Math.sin(x * 0.031 + side * 1.7) * 3.2 + Math.sin(x * 0.083 + side * 4.1) * 2.0 +
+            Math.sin(x * 0.19 + side * 2.3) * 1.1 + Math.sin(x * 0.02 + t * (0.9 + side * 0.2)) * 1.2;
+        // The river narrows to rounded ends instead of being cut off square
+        const taper = (x) => {
+            const d = Math.min(x - lavaMinX, lavaMaxX - x) / 34;
+            return d >= 1 ? 1 : 0.15 + 0.85 * Math.sqrt(Math.max(0, d * (2 - d)));
+        };
         const topShore = [];
         const bottomShore = [];
         for (let i = 0; i <= steps; i++) {
             const x = lavaMinX + i * dx;
-            topShore.push([x, centerY - halfThick + Math.sin(x * 0.04 + t * 2.2) * 4.5 + Math.cos(x * 0.09 - t * 1.5) * 2.2]);
-            bottomShore.push([x, centerY + halfThick + Math.sin(x * 0.045 - t * 2.0) * 4.5 + Math.cos(x * 0.07 + t * 1.7) * 2.2]);
+            const k = taper(x);
+            topShore.push([x, centerY + (-halfThick + shore(x, 0)) * k]);
+            bottomShore.push([x, centerY + (halfThick + shore(x, 1)) * k]);
         }
         const traceRiver = () => {
             ctx.beginPath();
@@ -2261,157 +3718,49 @@ class Game {
             ctx.closePath();
         };
 
-        traceRiver();
-        const riverGrad = ctx.createLinearGradient(0, centerY - halfThick, 0, centerY + halfThick);
-        riverGrad.addColorStop(0, '#2a0300');
-        riverGrad.addColorStop(0.15, '#8d0f00');
-        riverGrad.addColorStop(0.5, '#ff5200');
-        riverGrad.addColorStop(0.85, '#8d0f00');
-        riverGrad.addColorStop(1, '#2a0300');
-        ctx.fillStyle = riverGrad;
-        this.canvasCtrl.setNeonGlow('#ff4000', 32);
-        ctx.fill();
-        this.canvasCtrl.resetNeonGlow();
-
         // 3. EVERYTHING BELOW IS CLIPPED TO THE RIVER
         ctx.save();
         traceRiver();
         ctx.clip();
 
-        // 3a. Flowing current bands: dashed strokes whose dash offset scrolls with the flow
-        const bandColors = ['rgba(255, 40, 0, 0.55)', 'rgba(255, 120, 0, 0.5)', 'rgba(255, 190, 40, 0.45)', 'rgba(255, 120, 0, 0.5)', 'rgba(255, 40, 0, 0.55)'];
-        for (let k = 0; k < 5; k++) {
-            const layerY = centerY + (k - 2) * 9.5;
-            const speedMul = 0.7 + Math.abs(k - 2) * -0.15 + 0.3; // centre flows fastest
-            ctx.strokeStyle = bandColors[k];
-            ctx.lineWidth = 7;
-            ctx.lineCap = 'round';
-            ctx.setLineDash([22 + k * 6, 14 + k * 4]);
-            ctx.lineDashOffset = -flow * speedMul - k * 17;
-            ctx.beginPath();
-            for (let i = 0; i <= steps; i++) {
-                const x = lavaMinX + i * dx;
-                const wave = Math.sin(x * 0.035 - t * 3.0 + k) * 4.0 + Math.sin(x * 0.09 + t * 1.3 - k) * 2.0;
-                if (i === 0) ctx.moveTo(x, layerY + wave);
-                else ctx.lineTo(x, layerY + wave);
+        // Tile a texture across the river, scrolled by `offset` px
+        const tex = this.canvasCtrl.getLavaTextures();
+        const drawTiled = (img, offset) => {
+            const start = lavaMinX - (((offset % tex.tw) + tex.tw) % tex.tw);
+            for (let x = start; x < lavaMaxX; x += tex.tw) {
+                ctx.drawImage(img, x, centerY - tex.th / 2, tex.tw, tex.th);
             }
-            ctx.stroke();
-        }
-        ctx.setLineDash([]);
+        };
 
-        // 3b. Roaming incandescent hot spots (additive so they really burn)
-        ctx.save();
+        // 3a. The melt: two layers of the same flow moving at different speeds
+        //     so it churns instead of sliding like a conveyor belt
+        drawTiled(tex.molten, flow * 0.45);
+        ctx.globalAlpha = 0.55;
         ctx.globalCompositeOperation = 'lighter';
-        this.lavaHotspots.forEach(hs => {
-            const u = ((hs.u + t * hs.speed) % 1 + 1) % 1;
-            const x = lavaMinX + u * lavaWidth;
-            const y = centerY + Math.sin(t * 2.0 + hs.phase) * 9;
-            const r = hs.size * (1 + 0.2 * Math.sin(t * 5 + hs.phase));
-            const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-            g.addColorStop(0, 'rgba(255, 255, 210, 0.75)');
-            g.addColorStop(0.35, 'rgba(255, 200, 60, 0.45)');
-            g.addColorStop(1, 'rgba(255, 90, 0, 0)');
-            ctx.fillStyle = g;
-            ctx.fillRect(x - r, y - r, r * 2, r * 2);
-        });
-        ctx.restore();
+        drawTiled(tex.molten, flow * 0.8 + 211);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
 
-        // 3c. White-hot core veins
-        ctx.strokeStyle = 'rgba(255, 250, 225, 0.9)';
-        ctx.lineWidth = 2.0;
-        ctx.shadowColor = '#ffffff';
-        ctx.shadowBlur = 10;
-        ctx.setLineDash([60, 40]);
-        for (let v = 0; v < 2; v++) {
-            ctx.lineDashOffset = -flow * (1.2 + v * 0.3) - v * 50;
-            ctx.beginPath();
-            for (let i = 0; i <= steps; i++) {
-                const x = lavaMinX + i * dx;
-                const wave = Math.sin(x * 0.06 + t * 4.0 + v * 2) * 3.5 + Math.cos(x * 0.12 - t * 3.2) * 2.0;
-                const y = centerY + (v === 0 ? -4 : 5) + wave;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
-        }
-        ctx.setLineDash([]);
-        ctx.shadowBlur = 0;
+        // 3b. Slow breathing of the heat
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = `rgba(255, 90, 0, ${0.07 + 0.06 * Math.sin(t * 2.3)})`;
+        ctx.fillRect(lavaMinX, centerY - tex.th / 2, lavaWidth, tex.th);
+        ctx.globalCompositeOperation = 'source-over';
 
-        // 3d. Drifting obsidian crust plates with a molten rim and glowing fractures
-        this.lavaCrustPlates.forEach(plate => {
-            const px = lavaMinX + plate.u * lavaWidth;
-            ctx.save();
-            ctx.translate(px, centerY + plate.yOffset);
-            ctx.rotate(plate.angle);
+        // 3c. Cooled crust plates riding on top, slower than the melt under them
+        drawTiled(tex.crust, flow * 0.3 + 97);
 
-            const body = () => {
-                ctx.beginPath();
-                plate.points.forEach((pt, idx) => {
-                    const ppx = pt.x * (plate.width / 2);
-                    const ppy = pt.y * (plate.height / 2);
-                    if (idx === 0) ctx.moveTo(ppx, ppy);
-                    else ctx.lineTo(ppx, ppy);
-                });
-                ctx.closePath();
-            };
-
-            // Molten rim glow around the cold rock
-            ctx.shadowColor = '#ff6a00';
-            ctx.shadowBlur = 14;
-            ctx.fillStyle = '#120a0a';
-            body();
-            ctx.fill();
-            ctx.shadowBlur = 0;
-
-            // Rock body shading
-            const rockGrad = ctx.createLinearGradient(-plate.width / 2, -plate.height / 2, plate.width / 2, plate.height / 2);
-            rockGrad.addColorStop(0, '#2a1a18');
-            rockGrad.addColorStop(1, '#0d0707');
-            ctx.fillStyle = rockGrad;
-            body();
-            ctx.fill();
-            ctx.strokeStyle = '#5a2412';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-
-            // Glowing fractures, pulsing
-            const crackGlow = 0.6 + 0.4 * Math.sin(t * 6 + plate.u * 20);
-            ctx.strokeStyle = `rgba(255, ${Math.round(110 + 60 * crackGlow)}, 0, ${0.7 + 0.3 * crackGlow})`;
-            ctx.lineWidth = 1.3;
-            ctx.shadowColor = '#ff5500';
-            ctx.shadowBlur = 6 + 6 * crackGlow;
-            ctx.beginPath();
-            ctx.moveTo(-plate.width * 0.38, plate.height * 0.05);
-            ctx.lineTo(-plate.width * 0.05, -plate.height * 0.2);
-            ctx.lineTo(plate.width * 0.12, plate.height * 0.28);
-            ctx.lineTo(plate.width * 0.36, -plate.height * 0.08);
-            ctx.moveTo(-plate.width * 0.05, -plate.height * 0.2);
-            ctx.lineTo(plate.width * 0.02, -plate.height * 0.45);
-            ctx.stroke();
-
-            ctx.restore();
-        });
-
-        // 3e. Swelling magma bubbles
+        // 3d. Swelling gas bubbles: a glowing dome that bursts at full size
         this.lavaBubbles.forEach(b => {
-            ctx.save();
-            const bubbleGrad = ctx.createRadialGradient(b.x - b.radius * 0.3, b.y - b.radius * 0.3, b.radius * 0.1, b.x, b.y, b.radius);
-            bubbleGrad.addColorStop(0, '#ffffff');
-            bubbleGrad.addColorStop(0.3, '#ffcc00');
-            bubbleGrad.addColorStop(0.7, '#ff3300');
-            bubbleGrad.addColorStop(1, '#660a00');
+            const grow = b.radius / b.maxRadius;
+            const bubbleGrad = ctx.createRadialGradient(b.x - b.radius * 0.25, b.y - b.radius * 0.3, b.radius * 0.1, b.x, b.y, b.radius);
+            bubbleGrad.addColorStop(0, `rgba(255, 235, 150, ${0.55 + 0.4 * grow})`);
+            bubbleGrad.addColorStop(0.55, 'rgba(255, 120, 10, 0.9)');
+            bubbleGrad.addColorStop(1, 'rgba(90, 10, 0, 0.9)');
             ctx.fillStyle = bubbleGrad;
-            ctx.shadowColor = '#ff6600';
-            ctx.shadowBlur = 12;
             ctx.beginPath();
             ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
             ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1.0;
-            ctx.beginPath();
-            ctx.arc(b.x - b.radius * 0.2, b.y - b.radius * 0.2, b.radius * 0.4, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
         });
 
         ctx.restore(); // end river clip
@@ -2422,17 +3771,24 @@ class Game {
             pts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
             ctx.stroke();
         };
+        // A charred band of stone that fades into the floor (no hard outline),
+        // then a thin searing seam where rock meets melt
         ctx.lineCap = 'round';
-        ctx.strokeStyle = '#1a0806';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(18, 8, 5, 0.35)';
+        ctx.lineWidth = 11;
+        strokeShore(topShore);
+        strokeShore(bottomShore);
+        ctx.strokeStyle = 'rgba(22, 9, 6, 0.6)';
         ctx.lineWidth = 4;
         strokeShore(topShore);
         strokeShore(bottomShore);
-        ctx.strokeStyle = `rgba(255, 150, 20, ${0.75 + 0.25 * Math.sin(t * 4)})`;
-        ctx.lineWidth = 1.6;
-        ctx.shadowColor = '#ff8a00';
-        ctx.shadowBlur = 10;
-        strokeShore(topShore.map(([x, y]) => [x, y + 3]));
-        strokeShore(bottomShore.map(([x, y]) => [x, y - 3]));
+        ctx.strokeStyle = `rgba(255, 140, 20, ${0.45 + 0.2 * Math.sin(t * 4)})`;
+        ctx.lineWidth = 1.1;
+        ctx.shadowColor = '#ff7a00';
+        ctx.shadowBlur = 8;
+        strokeShore(topShore.map(([x, y]) => [x, y + 2]));
+        strokeShore(bottomShore.map(([x, y]) => [x, y - 2]));
         ctx.shadowBlur = 0;
 
         // 5. HEAT SHIMMER: faint rising streaks above and below the river
@@ -2850,13 +4206,18 @@ class Game {
         }
         if (data.type === 'team_lobby') {
             if (!t.started) {
+                // Only a host sends this: the room already has one, so a late
+                // arrival must not elect itself as a second host.
+                t.electing = false;
                 t.lobbyCount = data.count;
                 this.updateTeamLobby('Väntar på fler spelare...');
             }
             return;
         }
         if (data.type === 'team_roster') {
-            if (!t.isHost && !t.started) this.applyTeamRoster(data);
+            // A roster without me (my hello came too late) is not my match:
+            // wait for the host's 'team_busy' instead of joining as a ghost
+            if (!t.isHost && !t.started && (data.peers || []).some(p => p.id === t.myId)) this.applyTeamRoster(data);
             return;
         }
         if (data.type === 'tsync') {
@@ -2869,6 +4230,11 @@ class Game {
         if (data.type === 'hsync') {
             if (t.isHost || this.gameState !== 'playing') return;
             if (typeof data.timer === 'number') this.matchTimer = data.timer;
+            // Both towers are sized by the host's upgrades, not by mine
+            if (typeof data.maxTower === 'number') {
+                this.bottomTower.maxHp = data.maxTower;
+                this.topTower.maxHp = data.maxTower;
+            }
             if (data.towers) {
                 if (typeof data.towers[t.myTeam] === 'number') this.bottomTower.hp = data.towers[t.myTeam];
                 if (typeof data.towers[this.otherTeam()] === 'number') this.topTower.hp = data.towers[this.otherTeam()];
@@ -3011,6 +4377,12 @@ class Game {
         this.allies = [];
         this.foes = [];
         this.teamRamCooldowns = new Map();
+        // Back to the 1v1 rule (AI offline, replica online). A team match may
+        // have left the main opponent flagged as remote (frozen, unkillable
+        // AI next match) or as AI (a replica that also runs its own AI online).
+        this.enemy.aiControlled = null;
+        this.enemy.isRemote = undefined;
+        this.enemy.side = 'top';
         if (this.canvasCtrl.worldScale !== 1) {
             this.canvasCtrl.setWorldScale(1);
             this.inputCtrl.worldScale = 1;
@@ -3139,7 +4511,13 @@ class Game {
         const targetIsTop = car.side === 'bottom';
         const atTower = targetIsTop ? car.y < 85 : car.y > h - 85;
         if (!atTower) return;
-        if (car.x + car.radius < w / 2 - 80 || car.x - car.radius > w / 2 + 80) return;
+        if (targetIsTop && this.isHardBossRound) {
+            // The boss's twin towers sit in the corners, nothing in the middle
+            // (a reinforcement joining a boss match rams these)
+            const left = car.x + car.radius >= 80 && car.x - car.radius <= 160;
+            const right = car.x + car.radius >= w - 160 && car.x - car.radius <= w - 80;
+            if (!left && !right) return;
+        } else if (car.x + car.radius < w / 2 - 80 || car.x - car.radius > w / 2 + 80) return;
         if (Math.abs(car.vy) <= 0.05) return;
 
         const cooldown = this.teamRamCooldowns.get(car) || 0;
@@ -3148,14 +4526,16 @@ class Game {
 
         const profile = car.profile || this.player.profiles[car.activeWeaponKey] || this.player.profiles.katana;
         const ramDmg = profile.ramDamage || 100;
-        this.damageTower(targetIsTop ? 'top' : 'bottom', ramDmg);
+        // A replica's ram is counted by the machine that owns that samurai
+        if (!(this.teamNet && car.isRemote)) this.damageTower(targetIsTop ? 'top' : 'bottom', ramDmg);
         const color = targetIsTop ? '#ff0077' : '#00f0ff';
         this.particles.spawnDamageText(car.x, targetIsTop ? 70 : h - 70, `RAM! -${ramDmg}`, color, 1.3);
+        this.rubble(car.x, targetIsTop ? 80 : h - 80, 0, targetIsTop ? 1 : -1);
         this.particles.spawnShockwave(car.x, car.y, color, 60);
         this.canvasCtrl.shake(9, 220);
         this.audioSynth.playHit();
         car.vy = -car.vy * 0.8;
-        car.takeDamage(30, car.x, car.y, this.particles, this.canvasCtrl);
+        car.takeDamage(30, car.x, car.y, this.particles, this.canvasCtrl, true);
         this.checkWinCondition();
     }
 
@@ -3413,6 +4793,24 @@ class Game {
         const botPrimary = 'rgb(0, 240, 255)';
         const botCore = '#aaffff';
         renderGrandCitadel(w / 2, h, false, this.bottomTower.hp, this.bottomTower.maxHp, botPrimary, botCore, false);
+        // TORNSKÖLD: a shimmering dome over my tower while it lasts
+        if (this.towerShieldMs > 0) {
+            const t = performance.now();
+            const fade = Math.min(1, this.towerShieldMs / 3000); // fades out in the last 3 seconds
+            const blink = this.towerShieldMs < 3000 ? 0.6 + 0.4 * Math.sin(t / 60) : 1;
+            ctx.save();
+            ctx.globalAlpha = fade * blink;
+            const g = ctx.createRadialGradient(w / 2, h, 60, w / 2, h, 150);
+            g.addColorStop(0, 'rgba(0, 240, 255, 0)');
+            g.addColorStop(0.8, 'rgba(0, 240, 255, 0.12)');
+            g.addColorStop(1, 'rgba(0, 240, 255, 0.35)');
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(w / 2, h, 150, Math.PI, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = `rgba(120, 250, 255, ${0.6 + 0.3 * Math.sin(t / 200)})`;
+            ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.arc(w / 2, h, 150, Math.PI, Math.PI * 2); ctx.stroke();
+            ctx.restore();
+        }
 
         // Damage ember emissions for damaged towers
         if (this.topTower.hp < this.topTower.maxHp * 0.75) {
@@ -3429,6 +4827,12 @@ class Game {
 
     // Main Engine rendering cycle loop (RAF)
     loop(timestamp) {
+        // The trailer recording drives the frames itself (see Trailer.driveFrames)
+        if (this.externalClock) {
+            this.lastTime = timestamp;
+            requestAnimationFrame((t) => this.loop(t));
+            return;
+        }
         if (!this.lastTime) this.lastTime = timestamp;
         let dt = timestamp - this.lastTime;
         this.lastTime = timestamp;
@@ -3455,5 +4859,7 @@ class Game {
 
 // Start game when page resources load
 window.addEventListener('DOMContentLoaded', () => {
+    // Before the game: the canvas text hook must be in place for the first frame
+    window.i18n = new I18n();
     window.game = new Game(); // exposed for debugging in the console
 });

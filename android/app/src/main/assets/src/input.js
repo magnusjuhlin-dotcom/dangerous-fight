@@ -73,7 +73,10 @@ export class InputController {
                 this.dragCurrentY = coords.y;
 
                 if (this.onDragMove) {
-                    this.onDragMove(coords.x - this.dragStartX, coords.y - this.dragStartY);
+                    // Drag where you want to go. The player aims with the pull
+                    // vector (the slingshot's rubber band), so hand it the
+                    // opposite of the finger's movement.
+                    this.onDragMove(this.dragStartX - coords.x, this.dragStartY - coords.y);
                 }
                 if (e.cancelable) e.preventDefault();
             }
@@ -100,6 +103,10 @@ export class InputController {
 
                 const dx = this.dragCurrentX - this.dragStartX;
                 const dy = this.dragCurrentY - this.dragStartY;
+
+                // The system took the touch (edge gesture, call, notification):
+                // end the swipe without dashing off in a half-finished direction
+                if (e.type === 'touchcancel' && this.onDragMove) this.onDragMove(0, 0);
 
                 if (this.onDragEnd) {
                     this.onDragEnd(dx, dy);
@@ -132,7 +139,8 @@ export class InputController {
             this.dragCurrentY = coords.y;
 
             if (this.onDragMove) {
-                this.onDragMove(coords.x - this.dragStartX, coords.y - this.dragStartY);
+                // drag where you want to go (see the touch handler)
+                this.onDragMove(this.dragStartX - coords.x, this.dragStartY - coords.y);
             }
         });
 
@@ -151,6 +159,9 @@ export class InputController {
 
         // --- 3. KEYBOARD FALLBACK ---
         window.addEventListener('keydown', (e) => {
+            // Holding a key auto-repeats keydown ~30x/s, which would re-launch
+            // every repeat (pinned top speed, slash sound spam). One dash per press.
+            if (e.repeat) return;
             const key = e.code;
             let dirX = 0;
             let dirY = 0;
@@ -174,6 +185,7 @@ export class InputController {
         this.gamepadIndex = null;
         this.gpPrev = { buttons: [], axes: [0, 0] };
         this.gpAiming = false;
+        this.gpWaitNeutral = false;
         this.gpPeakMag = 0;
         this.gpNavRepeat = 0;
         this.onGamepadShoot = null;
@@ -218,7 +230,11 @@ export class InputController {
 
         if (inGame) {
             // Left stick = slingshot. Push in the direction you want to go.
-            if (mag > 0) {
+            // After an A-launch the stick is usually still pushed; wait for it
+            // to return to centre, or the next frame would start a new aim and
+            // startDrag() would zero the velocity we just launched with.
+            if (mag === 0) this.gpWaitNeutral = false;
+            if (mag > 0 && !this.gpWaitNeutral) {
                 if (!this.gpAiming) {
                     if (this.onDragStart && this.onDragStart(-1, -1, true)) {
                         this.gpAiming = true;
@@ -229,12 +245,16 @@ export class InputController {
                     const norm = Math.min(1, (mag - dead) / (1 - dead));
                     this.gpPeakMag = Math.max(this.gpPeakMag, norm);
                     // drag is opposite to the launch direction
-                    if (this.onDragMove) this.onDragMove(-ax / mag * 120 * norm, -ay / mag * 120 * norm);
+                    const stillAiming = this.onDragMove ? this.onDragMove(-ax / mag * 120 * norm, -ay / mag * 120 * norm) : true;
+                    // The samurai died mid-aim: drop the aim, so once it has
+                    // respawned the held stick starts a new one
+                    if (stillAiming === false) this.gpAiming = false;
                 }
             }
             const releaseNow = this.gpAiming && (mag === 0 || justPressed(0));
             if (releaseNow) {
                 this.gpAiming = false;
+                if (mag > 0) this.gpWaitNeutral = true;
                 if (this.gpPeakMag < 0.35 && mag === 0) {
                     // barely touched the stick: cancel instead of a weak launch
                     if (this.onDragMove) this.onDragMove(0, 0);
@@ -275,6 +295,8 @@ export class InputController {
 
         // Y reads the current screen aloud, anywhere
         if (justPressed(3) && this.onGamepadSpeak) this.onGamepadSpeak();
+        // Start / Menu pauses and resumes a match
+        if (justPressed(9) && this.onGamepadPause) this.onGamepadPause();
 
         this.gpPrev.buttons = gp.buttons.map(b => b.pressed || b.value > 0.5);
         this.gpPrev.axes = [ax, ay];

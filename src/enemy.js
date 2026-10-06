@@ -46,12 +46,17 @@ export class Enemy {
         this.profiles = {
             katana: { radius: 34, mass: 1.0, color: "#ff0077" }, // Cyber Car
             blades: { radius: 42, mass: 1.8, color: "#ff0088" }, // Plasma Truck
-            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }  // Laser Cycle
+            hammer: { radius: 28, mass: 0.6, color: "#ff4400" }, // Laser Cycle
+            oni: { radius: 38, mass: 1.5, color: "#ff3b1f" }      // Oni Berserker
         };
     }
 
     resetForRun(isBoss = false) {
         this.isBoss = isBoss;
+        this.enraged = false;
+        this.slamTimer = 0;
+        // An online opponent's weapon must not follow into the next offline match
+        this.activeWeaponKey = undefined;
         if (isBoss) {
             this.maxHp = 500;
             this.radius = 42; // Torso radius (was 24)
@@ -79,6 +84,7 @@ export class Enemy {
                 [1, 3, 60], // head to rightHand
                 [4, 5, 45]  // leftFoot to rightFoot
             ];
+            this.ragdollSync = { x: this.x, y: this.y, vx: 0, vy: 0 };
         } else {
             this.ragdollNodes = null;
             this.ragdollConstraints = null;
@@ -116,6 +122,8 @@ export class Enemy {
         rightHand.x = this.x + 34; rightHand.y = this.y - 8; rightHand.vx = 0; rightHand.vy = 0;
         leftFoot.x = this.x - 18; leftFoot.y = this.y + 32; leftFoot.vx = 0; leftFoot.vy = 0;
         rightFoot.x = this.x + 18; rightFoot.y = this.y + 32; rightFoot.vx = 0; rightFoot.vy = 0;
+        this.vx = 0; this.vy = 0;
+        this.ragdollSync = { x: this.x, y: this.y, vx: 0, vy: 0 };
     }
 
     setVehicleType(type) {
@@ -126,7 +134,7 @@ export class Enemy {
         this.color = p.color;
     }
 
-    takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
+    takeDamage(amount, attackerX, attackerY, particleSystem, canvasController, selfInflicted = false) {
         if (this.state === 'dead') return;
 
         // A replica belongs to another machine, which owns its hp/death and
@@ -145,14 +153,26 @@ export class Enemy {
         
         let dmg = amount;
         
-        // Apply player active perks
+        // Apply player active perks (not to the fixed cost of ramming a tower,
+        // and not to a team mate on my side: my perks must not hurt my ally)
         const player = this.game.player;
-        if (player && player.state !== 'dead') {
+        if (player && player.state !== 'dead' && !selfInflicted && this.side !== 'bottom') {
             let mult = 1.0;
-            
+
+            // Samurajraseri: double damage while it burns
+            if (this.game.rageActive) mult += 1.0;
+
+            // SUPERSKADA (fusk): three times the damage
+            if (this.game.cheats && this.game.cheats.damage) mult += 2.0;
+
             // Overdrive perk: +30% damage dealt
             if (player.activePerk === 'overdrive') {
                 mult += 0.30;
+            }
+
+            // Nanite Injection perk: +15% damage dealt
+            if (player.activePerk === 'nanites') {
+                mult += 0.15;
             }
             
             // Lightning Slash: +30% damage if player is dashing (speed > 0.15)
@@ -203,7 +223,10 @@ export class Enemy {
             this.aiState = 'idle';
             this.aiTimer = 3000;
             
-            if (this.game && typeof this.game.onEnemyDefeated === 'function') {
+            // Only a samurai on the opposing team is a K.O. for the player; an
+            // allied computer samurai (side 'bottom' in team matches) is not.
+            const isFoe = this.side !== 'bottom';
+            if (isFoe && this.game && typeof this.game.onEnemyDefeated === 'function') {
                 this.game.onEnemyDefeated(this.isBoss);
             }
             
@@ -219,7 +242,7 @@ export class Enemy {
             for (let i = 0; i < 20; i++) {
                 particleSystem.spawnAmbience(this.game.canvasCtrl.width, this.game.canvasCtrl.height, 2);
             }
-            this.game.audioSynth.playVictory();
+            if (isFoe) this.game.audioSynth.playVictory();
         } else {
             // Pushback force
             const pushAngle = Math.atan2(this.y - attackerY, this.x - attackerX);
@@ -254,15 +277,39 @@ export class Enemy {
             return;
         }
 
+        // FRYST DATOR (fusk): the computer stands frozen at the start of the match
+        const frozen = !!(this.game && this.game.cheatFreezeMs > 0 && this === this.game.enemy);
+        if (frozen) {
+            this.vx = 0;
+            this.vy = 0;
+            if (!(this.isBoss && this.ragdollNodes)) return;
+            // The boss ragdoll: clashes and shots push its limbs directly
+            // (game.js). Keep the body together and in sync with this.x/y,
+            // but let no speed build up, or the limbs fly off when it thaws.
+            this.ragdollNodes.forEach(node => { node.vx = 0; node.vy = 0; });
+        }
+
         // Apply friction & ragdoll constraints
         if (this.isBoss && this.ragdollNodes) {
-            // Transfer launch velocities to torso node
+            // Carry over what changed this.x/y/vx/vy since the last sync below
+            // (AI launches, lava drag, one-way gate blocking). Unchanged values
+            // must not overwrite the torso: game.js also pushes the nodes
+            // directly (clashes, ram knockback).
             const torso = this.ragdollNodes[0];
-            if (this.vx !== 0 || this.vy !== 0) {
+            const sync = this.ragdollSync || { x: this.x, y: this.y, vx: torso.vx, vy: torso.vy };
+            const shiftX = this.x - sync.x;
+            const shiftY = this.y - sync.y;
+            if (shiftX !== 0 || shiftY !== 0) {
+                // Moved from outside: move the whole body, not just the torso
+                this.ragdollNodes.forEach(node => {
+                    node.x += shiftX;
+                    node.y += shiftY;
+                });
+            }
+            if (this.vx !== sync.vx || this.vy !== sync.vy) {
+                // Transfer launch velocities to torso node
                 torso.vx = this.vx;
                 torso.vy = this.vy;
-                this.vx = 0;
-                this.vy = 0;
             }
 
             // Move each node
@@ -334,6 +381,7 @@ export class Enemy {
             this.y = torso.y;
             this.vx = torso.vx;
             this.vy = torso.vy;
+            this.ragdollSync = { x: this.x, y: this.y, vx: this.vx, vy: this.vy };
 
             // Spawn foot-jet thrust flame sparks
             const leftFoot = this.ragdollNodes[4];
@@ -409,12 +457,14 @@ export class Enemy {
 
         // --- AI CONTROLLER ---
         const runAI = this.aiControlled === null ? !this.game.isMultiplayer : this.aiControlled;
-        if (runAI) {
+        if (runAI && !frozen) {
             this.updateAI(deltaTime, player, particleSystem, width, height);
         }
     }
 
     updateAI(deltaTime, player, particleSystem, width, height) {
+        if (this.isBoss) this.updateBossPhase(deltaTime, player, particleSystem);
+
         // The charging zone is on this samurai's own half of the arena
         const towardsFoe = this.side === 'top' ? 1 : -1;      // +1 = downwards
         const myOwner = this.side === 'top' ? 'enemy' : 'player';
@@ -423,7 +473,7 @@ export class Enemy {
 
         // 1. Charge energy in zone
         if (inChargingZone && isMovingSlowly && this.energy < 3) {
-            const chargeSpeedMultiplier = this.isBoss ? 2.0 : 1.0;
+            const chargeSpeedMultiplier = this.isBoss ? 2.5 : 1.0;
             this.chargeTimer += deltaTime * chargeSpeedMultiplier;
             if (Math.random() < 0.1) {
                 particleSystem.spawnClashSparks(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20, '#ffffff');
@@ -441,7 +491,9 @@ export class Enemy {
         // AI decision logic
         this.aiTimer -= deltaTime;
         if (this.aiTimer <= 0) {
-            const decisionTimeMultiplier = this.isBoss ? 0.5 : 1.0;
+            const level = this.difficulty;
+            // (the boss is fast: decides about three times as often, more when enraged)
+            const decisionTimeMultiplier = (this.isBoss ? (this.enraged ? 0.25 : 0.35) : 1.0) * level.think;
             this.aiTimer = (Math.random() * 1000 + 800) * decisionTimeMultiplier; // reset decision timer
 
             // Check if we need to recharge
@@ -450,9 +502,14 @@ export class Enemy {
                 const targetX = width / 2 + (Math.random() - 0.5) * 60;
                 const targetY = this.side === 'top' ? 100 : height - 100;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
-                this.vx = Math.cos(angle) * 0.8;
-                this.vy = Math.sin(angle) * 0.8;
+                const backSpeed = this.isBoss ? 1.2 : 0.8;
+                this.vx = Math.cos(angle) * backSpeed;
+                this.vy = Math.sin(angle) * backSpeed;
                 this.game.audioSynth.playSlash('katana');
+            } else if (this.energy === 0) {
+                // Empty and in the zone: stay put until a charge is ready
+                // (dashing off here reset the 1.5 s charge every time)
+                this.aiTimer = 300;
             } else if (this.energy > 0 && Math.random() < 0.6) {
                 // Shoot a projectile
                 this.energy--;
@@ -462,7 +519,7 @@ export class Enemy {
                     // Fire swordwaves from BOTH hands!
                     const leftHand = this.ragdollNodes[2];
                     const rightHand = this.ragdollNodes[3];
-                    const speed = 0.50; // faster lasers for boss
+                    const speed = 0.62; // faster lasers for boss
                     
                     const dxLeft = player.x - leftHand.x;
                     this.game.spawnProjectile(leftHand.x, leftHand.y, dxLeft * 0.0015, speed * towardsFoe, 8, myOwner);
@@ -473,7 +530,8 @@ export class Enemy {
                     // Fire from where the samurai actually is, aimed at the player
                     const startX = this.x;
                     const startY = this.y;
-                    const dx = player.x - startX;
+                    // (on Lätt the aim wanders, so shots can be dodged by standing still)
+                    const dx = player.x - startX + (Math.random() - 0.5) * 160 * level.miss;
                     const speed = 0.45;
                     this.game.spawnProjectile(startX, startY, dx * 0.0015, speed * towardsFoe, 8, myOwner);
                     this.vy -= (0.045 * towardsFoe) / this.mass; // recoil, like the player
@@ -484,13 +542,80 @@ export class Enemy {
                 const targetY = this.side === 'top' ? height - 90 : 90;
                 const angle = Math.atan2(targetY - this.y, targetX - this.x);
                 
-                const launchForceMultiplier = this.isBoss ? 1.35 : 1.0;
+                const launchForceMultiplier = (this.isBoss ? (this.enraged ? 2.0 : 1.7) : 1.0) * level.force;
                 const launchForce = (0.95 + Math.random() * 0.45) * launchForceMultiplier;
                 this.vx = Math.cos(angle) * launchForce;
                 this.vy = Math.sin(angle) * launchForce;
                 this.game.audioSynth.playSlash('katana');
             }
         }
+    }
+
+    // Boss, second phase: under half health the Shogun goes berserk - it
+    // glows red, acts and dashes faster, and every few seconds slams the
+    // ground with a shock wave that hurts and throws back anyone close by.
+    updateBossPhase(deltaTime, player, particleSystem) {
+        const g = this.game;
+        if (!g || this.state === 'dead') return;
+        if (!this.enraged && this.hp < this.maxHp * 0.5) {
+            this.enraged = true;
+            this.slamTimer = 1500;
+            g.canvasCtrl.flash('rgba(255, 0, 0, 0.45)', 400);
+            g.canvasCtrl.shake(14, 600);
+            g.audioSynth.playVoiceSubBassDrop();
+            g.audioSynth.playGong();
+            particleSystem.spawnShockwave(this.x, this.y, '#ff0000', 150);
+            particleSystem.spawnDamageText(this.x, this.y - 60, 'SHOGUN RASAR!', '#ff2020', 1.8);
+            if (g.settings) g.settings.vibrate([100, 50, 100]);
+        }
+        if (!this.enraged) return;
+        this.slamTimer -= deltaTime;
+        if (this.slamTimer > 0) return;
+        this.slamTimer = 4500 + Math.random() * 2000;
+        // Ground slam
+        const reach = 150;
+        particleSystem.spawnShockwave(this.x, this.y, '#ff3300', reach);
+        particleSystem.spawnShockwave(this.x, this.y, '#ffffff', reach * 0.5);
+        if (g.rubble) g.rubble(this.x, this.y);
+        g.canvasCtrl.shake(10, 350);
+        g.audioSynth.playHit();
+        const targets = g.teamMatch && g.myTeamCars ? g.myTeamCars() : [player];
+        targets.forEach((c) => {
+            if (!c || c.state === 'dead') return;
+            const dx = c.x - this.x, dy = c.y - this.y, d = Math.hypot(dx, dy);
+            if (d > reach || d < 1) return;
+            const push = 0.9 * (1 - d / reach) + 0.3;
+            c.vx += (dx / d) * push;
+            c.vy += (dy / d) * push;
+            c.takeDamage(15, this.x, this.y, particleSystem, g.canvasCtrl);
+        });
+    }
+
+    // Lätt / Normal / Svår from the settings, for the computer's samurai on the
+    // other team in offline matches: how often it acts, how hard it dashes and
+    // how well it aims. Team mates and online opponents are never changed.
+    get difficulty() {
+        const g = this.game;
+        if (!g || g.isMultiplayer || this.side === 'bottom' || !g.settings) return { think: 1, force: 1, miss: 0 };
+        const d = g.settings.get('difficulty');
+        const base = d === 'easy' ? { think: 1.6, force: 0.8, miss: 1 }
+            : d === 'hard' ? { think: 0.7, force: 1.15, miss: 0 }
+            : { think: 1, force: 1, miss: 0.25 };
+        // higher levels: faster decisions, harder dashes, better aim
+        const lv = g.matchLevel || 1;
+        if (lv > 1) {
+            const k = Math.log2(lv);
+            base.think *= Math.max(0.45, 1 - 0.06 * k);
+            base.force *= Math.min(1.5, 1 + 0.04 * k);
+            base.miss *= Math.max(0, 1 - 0.1 * k);
+        }
+        // SEG DATOR (fusk): slow to decide, weak dashes, misses a lot
+        if (g.cheats && g.cheats.slow) {
+            base.think *= 2.2;
+            base.force *= 0.65;
+            base.miss = Math.max(base.miss, 1);
+        }
+        return base;
     }
 
     draw(ctx, canvasController) {
@@ -502,6 +627,19 @@ export class Enemy {
         const renderRadius = this.isBoss ? this.radius * 1.25 : this.radius;
         const enemyColor = this.color || '#ff0077';
         const currentSpeed = Math.hypot(this.vx, this.vy);
+
+        if (this.isBoss && this.enraged) {
+            const t = performance.now();
+            const r = renderRadius * (2.2 + 0.2 * Math.sin(t / 90));
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const glow = ctx.createRadialGradient(this.x, this.y, renderRadius * 0.4, this.x, this.y, r);
+            glow.addColorStop(0, 'rgba(255, 30, 0, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 0, 0, 0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(this.x - r, this.y - r, r * 2, r * 2);
+            ctx.restore();
+        }
 
         canvasController.drawSamuraiCharacter(
             ctx, 
@@ -516,7 +654,7 @@ export class Enemy {
             0, 
             this.hp / this.maxHp,
             this.trailHistory,
-            (this.y < 150),
+            this.side === 'bottom' ? (this.y > canvasController.height - 150) : (this.y < 150),
             currentSpeed
         );
 

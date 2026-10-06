@@ -19,6 +19,7 @@
 
         <!-- Dynamic HUD (Heads-Up Display) -->
         <div id="hud" class="hud-panel hidden">
+            <button id="btn-pause" class="hidden" aria-label="Paus" title="Paus">⏸</button>
             <!-- 4 Minute Match Timer -->
             <div id="match-timer" class="match-timer-box">04:00</div>
 
@@ -69,26 +70,107 @@
             </div>
 
             <!-- Contextual Touch Helper for Mobile -->
-            <div class="touch-hint">Dra i din samuraj för att göra en svärds-dash | Ladda i din zon längst ner</div>
+            <div class="touch-hint">Svep dit du vill för att göra en svärds-dash | Ladda i din zon längst ner</div>
             
             <!-- Floating shoot button for bottom player -->
             <button id="shoot-btn" class="btn-shoot neon-btn-cyan">SVÄRDSVÅG ⚡</button>
+            <button id="rage-btn" class="btn-rage hidden">RASERI</button>
+            <button id="shoot-btn-2" class="btn-shoot btn-shoot-top neon-btn-pink hidden">SVÄRDSVÅG ⚡</button>
+            <div id="tutorial-hint" class="tutorial-hint hidden"></div>
         </div>
 
         <!-- MAIN MENU OVERLAY -->
+        <!-- Trailer: the cinematic itself is drawn on the canvas; this only
+             catches the tap that skips it -->
+        <div id="trailer-overlay" class="hidden">
+            <div class="trailer-skip">Tryck för att hoppa över</div>
+        </div>
+
+        <!-- Daily gift: once a day, bigger for every day in a row -->
+        <div id="daily-gift" class="daily-gift hidden">
+            <div class="daily-gift-card">
+                <div class="daily-gift-icon">🎁</div>
+                <h2>DAGENS GÅVA</h2>
+                <div class="daily-gift-amount">⚡ <span id="daily-gift-amount">25</span></div>
+                <p id="daily-gift-streak"></p>
+                <button id="btn-daily-claim" class="btn btn-primary neon-btn-green">HÄMTA</button>
+            </div>
+        </div>
+
+        <!-- A new level (every 50 waves) -->
+        <div id="stage-up" class="daily-gift hidden">
+            <div class="daily-gift-card">
+                <div class="daily-gift-icon">🏯</div>
+                <h2>NY LEVEL!</h2>
+                <div class="daily-gift-amount" id="stage-up-title">LEVEL 2</div>
+                <p id="stage-up-text"></p>
+                <button id="btn-stage-ok" class="btn btn-primary neon-btn-green">KÖR!</button>
+            </div>
+        </div>
+
+        <!-- Level up -->
+        <div id="level-up" class="daily-gift hidden">
+            <div class="daily-gift-card">
+                <div class="daily-gift-icon">⭐</div>
+                <h2>NY RANG!</h2>
+                <div class="daily-gift-amount" id="level-up-title">RANG 2</div>
+                <p id="level-up-reward"></p>
+                <button id="btn-level-ok" class="btn btn-primary neon-btn-green">GRYMT!</button>
+            </div>
+        </div>
+
+        <!-- Which menu page you are on (swipe sideways between them) -->
+        <div id="menu-dots" class="hidden" data-no-translate></div>
+
+        <!-- Language box: shown on the first start, and from the menu button -->
+        <div id="lang-box" class="overlay-screen hidden" data-no-translate>
+            <h2>WHICH LANGUAGE DO YOU WANT TO HAVE?</h2>
+            <p class="section-desc">Vilket språk vill du ha?</p>
+            <div class="menu-buttons">
+                <button id="btn-lang-sv" class="btn btn-primary neon-btn-cyan">SVENSKA</button>
+                <button id="btn-lang-en" class="btn btn-primary neon-btn-pink">ENGLISH</button>
+            </div>
+        </div>
+
         <div id="main-menu" class="overlay-screen active">
+            <button id="btn-settings" class="corner-btn" aria-label="Inställningar" title="Inställningar">⚙</button>
             <div class="glitch-title" data-text="DANGEROUS FIGHT">DANGEROUS FIGHT</div>
             <div class="subtitle">SLINGSHOT ARENA</div>
+            <div class="level-display">
+                <span id="stage-val">LEVEL 1 · VÅG 1 AV 50</span>
+                <span id="level-val" class="rank-val">RANG 1 · LÄRLING</span>
+                <div class="xp-bar"><div id="xp-fill"></div></div>
+            </div>
 
             <div class="menu-buttons">
-                <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
-                <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
-                <button id="btn-play-team" class="btn btn-secondary neon-btn-green">LAGMATCH 2v2 - 4v4</button>
-                <button id="btn-scoreboard" class="btn btn-secondary neon-btn-orange">POÄNGTAVLA 🏆</button>
-                <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">SAMURAI-DOJO</button>
-                <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">SVÄRDSVÅG-BUTIK</button>
-                <button id="btn-upgrades" class="btn btn-secondary neon-btn-green">UPPGRADERINGAR</button>
-                <button id="btn-howto" class="btn btn-secondary neon-btn-cyan">HUR SPELAR MAN? ❔</button>
+                <!-- The three ways to play, together in one box -->
+                <div class="play-box">
+                    <div class="play-box-title">SPELA</div>
+                    <button id="btn-play-ai" class="btn btn-primary neon-btn-cyan">SPELA MOT DATORN</button>
+                    <button id="btn-play-online" class="btn btn-secondary neon-btn-pink">SPELA ONLINE</button>
+                    <button id="btn-play-team" class="btn btn-secondary neon-btn-green">LAG&shy;MATCH 2v2 - 4v4</button>
+                    <button id="btn-play-local" class="btn btn-secondary neon-btn-orange">2 SPELARE</button>
+                </div>
+                <div class="play-box">
+                    <div class="play-box-title">ARENA</div>
+                    <button id="btn-scoreboard" class="btn btn-secondary neon-btn-orange">POÄNG&shy;TAVLA 🏆</button>
+                    <button id="btn-weapons" class="btn btn-secondary neon-btn-orange">SAMURAI-DOJO</button>
+                    <button id="btn-cannons" class="btn btn-secondary neon-btn-cyan">SVÄRDS&shy;VÅG-BUTIK</button>
+                </div>
+                <div class="play-box play-box-five">
+                    <div class="play-box-title">BUTIKER</div>
+                    <button id="btn-upgrades" class="btn btn-secondary neon-btn-green">UPPGRADE&shy;RINGAR</button>
+                    <button id="btn-reinforce" class="btn btn-secondary neon-btn-pink">EXTRA SAMURAJ</button>
+                    <button id="btn-coin-shop" class="btn btn-secondary neon-btn-orange">SAMURAJ-BUTIK 💰</button>
+                    <button id="btn-helper-shop" class="btn btn-secondary neon-btn-cyan">HJÄLPMEDEL 🧰</button>
+                    <button id="btn-cheat-shop" class="btn btn-secondary neon-btn-pink">FUSK 😈</button>
+                </div>
+                <div class="play-box">
+                    <div class="play-box-title">MER</div>
+                    <button id="btn-missions" class="btn btn-secondary neon-btn-green">UPPDRAG 🎯<span id="missions-badge" class="missions-badge hidden"></span></button>
+                    <button id="btn-howto" class="btn btn-secondary neon-btn-cyan">HUR SPELAR MAN? ❔</button>
+                    <button id="btn-trailer" class="btn btn-secondary neon-btn-pink">TRAILER 🎬</button>
+                </div>
             </div>
             
             <div class="high-score-display">HÖGSTA VÅG: <span id="highest-wave-val">1</span></div>
@@ -203,6 +285,18 @@
                     </div>
                     <div class="weapon-cost">Kostar ⚡ 250</div>
                 </div>
+
+                <!-- Oni Berserker -->
+                <div class="weapon-card locked" id="wpn-oni" data-weapon="oni">
+                    <div class="weapon-glow pink"></div>
+                    <h3>ONI BERSERKER (Brutal)</h3>
+                    <div class="weapon-stats">
+                        <div class="stat-row">HP / Vikt: <span>130 (Tung)</span></div>
+                        <div class="stat-row">Hugg-Skada: <span>110</span></div>
+                        <div class="stat-row">Ramm-Skada: <span>Extrem</span></div>
+                    </div>
+                    <div class="weapon-cost">Kostar ⚡ 600</div>
+                </div>
             </div>
 
             <div class="credits-display">Dina Cyber-Credits: <span id="credits-weapons-val">0</span> ⚡</div>
@@ -311,6 +405,91 @@
             <button id="btn-cannons-back" class="btn btn-secondary back-btn">TILLBAKA</button>
         </div>
 
+        <!-- Extra samuraj: buy the team mate who jumps in at half time -->
+        <div id="reinforce-screen" class="overlay-screen hidden">
+            <h2>EXTRA SAMURAJ</h2>
+            <p class="section-desc">Köp en extra samuraj för Cyber-Credits ⚡. Den hoppar in i ditt lag när halva matchtiden har gått, och en till när det är 20 sekunder kvar. Gäller matcher mot datorn. Har du köpt flera väljer du vem som kommer.</p>
+            <div class="weapons-grid" id="reinforce-grid"></div>
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-reinforce-val">0</span> ⚡</div>
+            <button id="btn-reinforce-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- Daily missions -->
+        <div id="missions-screen" class="overlay-screen hidden">
+            <h2>UPPDRAG</h2>
+            <p class="section-desc">Tre nya uppdrag varje dag. Klara dem och hämta dina Cyber-Credits ⚡</p>
+            <div class="missions-list" id="missions-list"></div>
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-missions-val">0</span> ⚡</div>
+            <button id="btn-missions-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- Settings -->
+        <div id="settings-screen" class="overlay-screen hidden">
+            <h2>INSTÄLLNINGAR</h2>
+            <div class="settings-list">
+                <label class="setting-row">Musik
+                    <input type="range" id="set-music" min="0" max="100" step="5">
+                </label>
+                <label class="setting-row">Ljudeffekter
+                    <input type="range" id="set-effects" min="0" max="100" step="5">
+                </label>
+                <label class="setting-row">Röst
+                    <input type="checkbox" id="set-voice">
+                </label>
+                <label class="setting-row">Vibration
+                    <input type="checkbox" id="set-vibration">
+                </label>
+                <div class="setting-row">Svårighet mot datorn
+                    <div class="difficulty-picker" id="settings-difficulty">
+                        <button class="diff-btn" data-diff="easy">LÄTT</button>
+                        <button class="diff-btn" data-diff="normal">NORMAL</button>
+                        <button class="diff-btn" data-diff="hard">SVÅR</button>
+                    </div>
+                </div>
+            </div>
+            <button id="btn-language" class="btn btn-secondary neon-btn-green" data-no-translate>SPRÅK / LANGUAGE</button>
+            <button id="btn-settings-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- Pause (matches against the computer) -->
+        <div id="pause-screen" class="overlay-screen hidden">
+            <h2>PAUS</h2>
+            <div class="menu-buttons">
+                <button id="btn-resume" class="btn btn-primary neon-btn-cyan">FORTSÄTT</button>
+                <button id="btn-pause-settings" class="btn btn-secondary neon-btn-green">INSTÄLLNINGAR</button>
+                <button id="btn-quit-match" class="btn btn-secondary neon-btn-pink">AVSLUTA MATCHEN</button>
+            </div>
+        </div>
+
+        <!-- Fusk-butik: cheats for real money (Google Play), kept for good -->
+        <div id="cheat-shop-screen" class="overlay-screen hidden">
+            <h2>FUSK 😈</h2>
+            <p class="section-desc">Köp fusk för riktiga pengar. Du köper det en gång och har det för alltid. Slå på och av fusket innan en match mot datorn – det fungerar aldrig online.<br><b>Fråga en vuxen innan du köper.</b></p>
+            <div class="weapons-grid" id="cheat-shop-grid"></div>
+            <p class="lobby-status" id="cheat-shop-status"></p>
+            <button id="btn-cheat-shop-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- Hjälpmedel-butik: one-match boosts for real money (Google Play) -->
+        <div id="helper-shop-screen" class="overlay-screen hidden">
+            <h2>HJÄLPMEDEL</h2>
+            <p class="section-desc">Köp hjälpmedel för riktiga pengar och slå på dem innan en match mot datorn. Varje hjälpmedel räcker en match.<br><b>Fråga en vuxen innan du köper.</b></p>
+            <div class="credits-display">Du har: <span id="helper-owned"></span></div>
+            <div class="weapons-grid" id="helper-shop-grid"></div>
+            <p class="lobby-status" id="helper-shop-status"></p>
+            <button id="btn-helper-shop-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
+        <!-- Samuraj-butik: Cyber-Credits for real money (Google Play) -->
+        <div id="coin-shop-screen" class="overlay-screen hidden">
+            <h2>SAMURAJ-BUTIK</h2>
+            <p class="section-desc">Köp Cyber-Credits ⚡ för riktiga pengar. Största paketet ger tre gånger så mycket per krona!<br><b>Fråga en vuxen innan du köper.</b></p>
+            <div class="weapons-grid" id="coin-shop-grid"></div>
+            <p class="lobby-status" id="coin-shop-status"></p>
+            <div class="credits-display">Dina Cyber-Credits: <span id="credits-coinshop-val">0</span> ⚡</div>
+            <button id="btn-coin-shop-back" class="btn btn-secondary back-btn">TILLBAKA</button>
+        </div>
+
         <!-- PERSISTENT UPGRADES OVERLAY -->
         <div id="upgrades-menu" class="overlay-screen hidden">
             <h2>UPPGRADERINGAR</h2>
@@ -362,10 +541,24 @@
         <div id="perk-selection-screen" class="overlay-screen hidden">
             <h1 class="glitch-title" data-text="CYBER-PERK DETEKTERAD">VÄLJ CYBER-PERK</h1>
             <p class="subtitle cyan">Installera en tillfällig uppgradering för denna strid</p>
-            
+            <div class="difficulty-picker" id="perk-difficulty">
+                <button class="diff-btn" data-diff="easy">LÄTT</button>
+                <button class="diff-btn" data-diff="normal">NORMAL</button>
+                <button class="diff-btn" data-diff="hard">SVÅR</button>
+            </div>
+            <div class="helper-picks hidden" id="helper-picks">
+                <div class="helper-picks-title">HJÄLPMEDEL (tryck för att slå på)</div>
+                <div class="helper-picks-row" id="helper-picks-row"></div>
+            </div>
+            <div class="helper-picks hidden" id="cheat-picks">
+                <div class="helper-picks-title">FUSK 😈 (tryck för att slå på/av)</div>
+                <div class="helper-picks-row" id="cheat-picks-row"></div>
+            </div>
+
             <div class="weapons-grid" id="perks-selection-grid">
                 <!-- Dynamically populated -->
             </div>
+            <button id="btn-perks-back" class="btn btn-secondary back-btn">TILLBAKA</button>
         </div>
 
         <!-- HOW TO PLAY OVERLAY -->
@@ -378,7 +571,7 @@
                     <div class="howto-icon">🏹</div>
                     <div>
                         <h3>Dasha</h3>
-                        <p>Dra i din samuraj (eller var som helst på nedre halvan) som en slangbella och släpp. Längre drag = hårdare dash. På dator: <b>WASD / pilar</b>. Handkontroll (Xbox): <b>vänster spak</b> – tryck åt hållet du vill dasha och släpp, <b>X / RT</b> skjuter, <b>A</b> väljer, <b>B</b> tillbaka, <b>Y</b> läser upp.</p>
+                        <p>Svep var som helst på skärmen åt det håll du vill åka. Även ett kort svep ger en rejäl dash, ett längre ger lite mer fart. På dator: <b>WASD / pilar</b>. Handkontroll (Xbox): <b>vänster spak</b> – tryck åt hållet du vill dasha och släpp, <b>X / RT</b> skjuter, <b>A</b> väljer, <b>B</b> tillbaka, <b>Y</b> läser upp.</p>
                     </div>
                 </div>
                 <div class="howto-item">
@@ -393,6 +586,20 @@
                     <div>
                         <h3>Svärdsvåg</h3>
                         <p>Stå stilla i din laddzon längst ner så laddas upp till <b>3 energi</b>. Tryck <b>SVÄRDSVÅG</b> för att skjuta rakt upp. Dashar du snabbt in i ett fiendeskott <b>parerar</b> du det tillbaka.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">🔥</div>
+                    <div>
+                        <h3>Samurajraseri</h3>
+                        <p>Slå ut, ramma, parera och träffa för att fylla den röda RASERI-mätaren. När den lyser: tryck på den! Tolv svärdsvågor åt alla håll och dubbel skada i 6 sekunder. Träffar i snabb följd ger kombo och bonuspoäng.</p>
+                    </div>
+                </div>
+                <div class="howto-item">
+                    <div class="howto-icon">🎯</div>
+                    <div>
+                        <h3>Uppdrag och paus</h3>
+                        <p>Klara dagens tre uppdrag för extra Cyber-Credits. Mot datorn kan du pausa med knappen uppe till vänster (Start på handkontrollen) och välja Lätt, Normal eller Svår. Bossen blir rasande när den har halva livet kvar – se upp för markslagen!</p>
                     </div>
                 </div>
                 <div class="howto-item">

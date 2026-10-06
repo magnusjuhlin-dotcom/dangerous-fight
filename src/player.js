@@ -70,6 +70,16 @@ export class Player {
                 ramDamage: 70,
                 speedMultiplier: 1.35,
                 color: "#39ff14"
+            },
+            // A demon warrior: tough and brutal up close, a little slower
+            oni: {
+                name: "Oni Berserker",
+                radius: 38,
+                mass: 1.5,
+                baseHp: 130,
+                ramDamage: 220,
+                speedMultiplier: 0.88,
+                color: "#ff3b1f"
             }
         };
     }
@@ -113,18 +123,23 @@ export class Player {
         if (this.state === 'dead') return false;
         const dist = Math.hypot(px - this.x, py - this.y);
         const height = this.game.canvasCtrl.height;
-        // Accept touches close to the car OR anywhere in the bottom half of the screen (excluding the very edges)
-        return dist <= this.radius * 3.0 || (py > height * 0.5 && py < height - 5);
+        // Swipe from anywhere on the screen (the very edges belong to the system gestures)
+        return dist <= this.radius * 3.0 || (py > 5 && py < height - 5);
     }
 
     // Called when the user starts a drag
-    startDrag() {
+    // A finger or mouse swipes: the samurai keeps moving until it is let go.
+    // The gamepad stick aims on the spot (`holdStill`), like before.
+    startDrag(holdStill = false) {
         if (this.state === 'dead') return false;
         this.isAiming = true;
+        this.aimHoldsStill = holdStill;
         this.aimDx = 0;
         this.aimDy = 0;
-        this.vx = 0;
-        this.vy = 0;
+        if (holdStill) {
+            this.vx = 0;
+            this.vy = 0;
+        }
         return true;
     }
 
@@ -153,13 +168,24 @@ export class Player {
         if (!this.isAiming) return;
         this.isAiming = false;
         
-        const dist = Math.hypot(this.aimDx, this.aimDy);
+        let dist = Math.hypot(this.aimDx, this.aimDy);
+        if (!this.aimHoldsStill && dist > 12) {
+            // A quick short swipe should still be a real dash: short swipes
+            // start from a strong base and longer ones build up to full power
+            const power = Math.min(120, 55 + dist);
+            this.aimDx *= power / dist;
+            this.aimDy *= power / dist;
+            dist = power;
+        }
         if (dist > 15) {
             // Slingshot velocity scale: launch opposite to drag direction
             // Full 120 px pull = ~1.1 px/ms, roughly twice the AI's dash speed, so the
             // samurai crosses the arena in well under a second. (0.12 was the old value
             // and gave 10+ px/ms, which shot it across in a few frames like a pinball.)
-            const launchScale = 0.017 * this.profile.speedMultiplier;
+            // SUPERFART (fusk): 50 % faster dashes for my samurai
+            const g = this.game;
+            const cheatSpeed = g && g.cheats && g.cheats.speed && this === g.player ? 1.5 : 1;
+            const launchScale = 0.017 * this.profile.speedMultiplier * cheatSpeed;
             this.vx = -this.aimDx * launchScale;
             this.vy = -this.aimDy * launchScale;
             
@@ -223,9 +249,13 @@ export class Player {
 
     takeDamage(amount, attackerX, attackerY, particleSystem, canvasController) {
         if (this.state === 'dead') return;
+        // GUDSLÄGE (fusk): nothing hurts my samurai
+        if (this.game && this.game.cheats && this.game.cheats.god && this === this.game.player) return;
         
         // Check Shield Perk
-        if (this.activePerk === 'shieldCharge' && this.shieldHp > 0) {
+        // (not when hp is already 0, e.g. lava drained it: that hit is the
+        // death blow and must not leave the samurai alive at 0 HP)
+        if (this.activePerk === 'shieldCharge' && this.shieldHp > 0 && this.hp > 0) {
             this.shieldHp = 0;
             this.shieldCooldown = 12000; // 12 seconds
             particleSystem.spawnShockwave(this.x, this.y, '#ff00aa', 60);
@@ -261,7 +291,8 @@ export class Player {
         
         if (this.hp <= 0) {
             this.state = 'dead';
-            this.respawnTimer = 3000; // 3 seconds respawn
+            // 3 seconds respawn (1 second with the SNABB ÅTERUPPSTÅNDELSE hjälpmedel)
+            this.respawnTimer = this.game && this.game.fastRevive && this === this.game.player ? 1000 : 3000;
             this.vx = 0;
             this.vy = 0;
             this.isAiming = false;
@@ -313,8 +344,8 @@ export class Player {
             return;
         }
 
-        // Apply friction & momentum
-        if (!this.isAiming) {
+        // Apply friction & momentum (a swipe in progress does not stop the samurai)
+        if (!this.isAiming || !this.aimHoldsStill) {
             this.x += this.vx * deltaTime;
             this.y += this.vy * deltaTime;
 
@@ -368,8 +399,12 @@ export class Player {
         // Player charging zone is at the bottom (y > height - 150)
         const inChargingZone = this.y > height - 150;
         const isMovingSlowly = Math.hypot(this.vx, this.vy) < 0.04;
-        
-        if (inChargingZone && isMovingSlowly && !this.isAiming) {
+        // A finger resting on the screen (or a tap next to the SVÄRDSVÅG button)
+        // no longer freezes the samurai, so it must not stop the charge either.
+        // Only the gamepad's on-the-spot aim does.
+        const aimingOnTheSpot = this.isAiming && this.aimHoldsStill;
+
+        if (inChargingZone && isMovingSlowly && !aimingOnTheSpot) {
             // Shadow Ninja charges energy 20% faster
             const ninjaFactor = this.activeWeaponKey === 'hammer' ? 1.20 : 1.0;
             const chargeNeeded = 1500 / ((1 + this.upgPostureLvl * 0.15) * ninjaFactor); // ms

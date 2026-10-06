@@ -70,6 +70,9 @@ dependencies {
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
+  // Google Play Billing: the Samuraj-butik sells Cyber-Credits
+  implementation("com.android.billingclient:billing-ktx:8.0.0")
+
   // Core Android dependencies
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)

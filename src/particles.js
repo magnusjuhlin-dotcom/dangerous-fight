@@ -81,8 +81,42 @@ class Particle {
             // Hot thermal buoyancy
             this.vy -= 0.00035 * deltaTime;
             this.vx += Math.sin(this.life * 0.02) * 0.0006 * deltaTime;
+        } else if (this.type === 'chip') {
+            // A stone chip seen from above: it flies up (z), falls back, bounces
+            // a couple of times losing speed, then lies still until it fades
+            this.vz -= 0.0011 * deltaTime;
+            this.z += this.vz * deltaTime;
+            if (this.z <= 0) {
+                this.z = 0;
+                if (this.vz < -0.05 && this.bounces < 3) {
+                    this.vz = -this.vz * 0.35;
+                    this.bounces++;
+                } else {
+                    this.vz = 0;
+                }
+                this.vx *= 0.55;
+                this.vy *= 0.55;
+                this.rotSpeed *= 0.5;
+            }
+            if (this.z === 0) {
+                this.vx *= Math.pow(0.9, deltaTime / 16);
+                this.vy *= Math.pow(0.9, deltaTime / 16);
+            }
+            this.angle += this.rotSpeed * deltaTime;
+            this.alpha = Math.min(1, progress * 4); // stays solid, fades at the very end
+        } else if (this.type === 'dustpuff') {
+            // Dust kicked up from the floor: spreads, slows and thins out
+            this.vx *= Math.pow(0.9, deltaTime / 16);
+            this.vy *= Math.pow(0.9, deltaTime / 16);
+            this.size += 0.02 * deltaTime;
+            this.alpha = progress * 0.5;
+        } else if (this.type === 'ash') {
+            // Ash drifting down over the arena: sways from side to side
+            this.vx += Math.sin((this.life + this.phase) * 0.003) * 0.00002 * deltaTime;
+            this.angle += this.rotSpeed * deltaTime;
+            this.alpha = Math.min(1, progress * 3, (1 - progress) * 6) * 0.7;
         }
-        
+
         return this.life > 0;
     }
 
@@ -178,6 +212,48 @@ class Particle {
             ctx.shadowColor = this.color;
             ctx.shadowBlur = 8;
             ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+
+        } else if (this.type === 'chip') {
+            // shadow on the floor, the chip above it at its height
+            const lift = Math.min(1, this.z / 30);
+            ctx.fillStyle = `rgba(0, 0, 0, ${0.35 * (1 - lift * 0.6)})`;
+            ctx.beginPath();
+            ctx.ellipse(this.x + this.z * 0.25, this.y + 1, this.size * (1 + lift * 0.4), this.size * 0.6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.translate(this.x, this.y - this.z);
+            ctx.rotate(this.angle);
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.moveTo(-this.size, -this.size * 0.4);
+            ctx.lineTo(this.size * 0.3, -this.size * 0.9);
+            ctx.lineTo(this.size, this.size * 0.2);
+            ctx.lineTo(-this.size * 0.2, this.size * 0.8);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 240, 220, 0.18)'; // lit facet
+            ctx.beginPath();
+            ctx.moveTo(-this.size, -this.size * 0.4);
+            ctx.lineTo(this.size * 0.3, -this.size * 0.9);
+            ctx.lineTo(0, 0);
+            ctx.closePath();
+            ctx.fill();
+
+        } else if (this.type === 'ash') {
+            // a small tumbling flake; some still glow from the heat
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.angle);
+            ctx.fillStyle = this.color;
+            ctx.fillRect(-this.size, -this.size * 0.4, this.size * 2, this.size * 0.8);
+
+        } else if (this.type === 'dustpuff') {
+            const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size);
+            grad.addColorStop(0, 'rgba(120, 108, 92, 0.55)');
+            grad.addColorStop(0.6, 'rgba(90, 82, 70, 0.25)');
+            grad.addColorStop(1, 'rgba(70, 64, 56, 0)');
+            ctx.fillStyle = grad;
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
             ctx.fill();
@@ -404,6 +480,51 @@ export class ParticleSystem {
 
         // Add a few flying metal shards on heavy clash
         this.spawnMetalShards(x, y, color, 4);
+    }
+
+    // Chips of floor stone knocked loose by a heavy impact: they fly up,
+    // tumble, bounce and settle on the floor
+    spawnStoneChips(x, y, count = 8, dirX = 0, dirY = 0) {
+        if (this.particles.length > 400) return;
+        const base = Math.atan2(dirY, dirX);
+        const aimed = dirX !== 0 || dirY !== 0;
+        for (let i = 0; i < count; i++) {
+            const angle = aimed ? base + (Math.random() - 0.5) * 2.2 : Math.random() * Math.PI * 2;
+            const speed = Math.random() * 0.22 + 0.06;
+            const tone = Math.round(45 + Math.random() * 40);
+            const p = new Particle(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed,
+                `rgb(${tone + 6}, ${tone + 2}, ${tone - 4})`, Math.random() * 2.2 + 1.2,
+                Math.random() * 1800 + 2200, 1, 'chip');
+            p.z = 2;
+            p.vz = Math.random() * 0.35 + 0.15;
+            p.rotSpeed = (Math.random() - 0.5) * 0.03;
+            this.particles.push(p);
+        }
+    }
+
+    // One flake of ash drifting down from above the arena
+    spawnAsh(width, height) {
+        if (this.particles.length > 350) return;
+        const glowing = Math.random() < 0.18;
+        const p = new Particle(Math.random() * width, -10, (Math.random() - 0.5) * 0.02, 0.02 + Math.random() * 0.025,
+            glowing ? `rgba(255, ${Math.round(90 + Math.random() * 80)}, 20, 0.9)` : `rgba(${Math.round(120 + Math.random() * 50)}, ${Math.round(115 + Math.random() * 45)}, ${Math.round(110 + Math.random() * 40)}, 0.8)`,
+            Math.random() * 1.4 + 0.8, height / 0.03 + 4000, 1, 'ash');
+        p.phase = Math.random() * 10000;
+        p.rotSpeed = (Math.random() - 0.5) * 0.004;
+        this.particles.push(p);
+    }
+
+    // Dust kicked up from the floor, blown away from `dir`
+    spawnDust(x, y, dirX = 0, dirY = 0, count = 5) {
+        if (this.particles.length > 400) return;
+        const len = Math.hypot(dirX, dirY) || 1;
+        for (let i = 0; i < count; i++) {
+            const spread = (Math.random() - 0.5) * 0.12;
+            const vx = (dirX / len) * (Math.random() * 0.08 + 0.02) + spread;
+            const vy = (dirY / len) * (Math.random() * 0.08 + 0.02) + (Math.random() - 0.5) * 0.12;
+            this.particles.push(new Particle(x + (Math.random() - 0.5) * 14, y + (Math.random() - 0.5) * 14,
+                vx, vy, '#776c5c', Math.random() * 6 + 5, Math.random() * 500 + 600, 1, 'dustpuff'));
+        }
     }
 
     // Realistic jagged metallic shards from armor/weapon impacts

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Röststudio – Dangerous Fight</title>
+<style>
+    :root { --bg: #07080d; --card: #11131c; --text: #e8ecf5; --muted: #8b93a8; --cyan: #00f0ff; --red: #ff2a5f; --green: #39ff88; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; padding: 24px 16px 64px; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { color: var(--cyan); letter-spacing: 2px; margin: 0 0 8px; }
+    .intro { color: var(--muted); line-height: 1.5; margin-bottom: 24px; }
+    .intro b { color: var(--text); }
+    .line { background: var(--card); border: 1px solid #222739; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+    .line.done { border-color: var(--green); }
+    .line h2 { font-size: 16px; margin: 0 0 4px; }
+    .line code { color: var(--muted); font-size: 12px; }
+    .manus { white-space: pre-wrap; background: #0b0d14; border-radius: 6px; padding: 10px; margin: 10px 0; line-height: 1.5; font-size: 15px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button { background: #1b1f2d; color: var(--text); border: 1px solid #333a52; border-radius: 6px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+    button:disabled { opacity: .4; cursor: default; }
+    button.rec { border-color: var(--red); color: var(--red); }
+    button.rec.on { background: var(--red); color: #fff; }
+    button.save { border-color: var(--green); color: var(--green); }
+    .status { color: var(--muted); font-size: 13px; }
+    .err { color: var(--red); }
+</style>
+</head>
+<body>
+<main>
+    <h1>RÖSTSTUDIO</h1>
+    <p class="intro">
+        Spela in rösten själv. Den låter mer äkta än en datorröst.<br>
+        1. Tryck <b>Spela in</b>, läs manuset lugnt och mörkt, en handbredd från mikrofonen, och tryck <b>Stoppa</b>.<br>
+        2. Tryck <b>Lyssna</b>. Spela in igen om du inte är nöjd.<br>
+        3. Tryck <b>Spara fil</b>. Lägg filen i mappen <b>assets/voice/</b> i spelet och behåll filnamnet.<br>
+        Repliker som saknar en inspelning läses fortfarande av datorrösten.
+    </p>
+    <p id="mic-error" class="err" hidden></p>
+    <div id="lines"></div>
+</main>
+<script>
+// key = file name the game looks for (assets/voice/<key>.webm); the screen
+// keys are the ids of the game's screens, read when 🔊 is pressed there.
+const LINES = [
+    { key: 'startup', title: 'När spelet startar', manus: 'AJ Sports. To the game!' },
+    { key: 'intro', title: 'Intro före matchen', manus: 'Dangerous fight is coming.' },
+    { key: 'intro-boss', title: 'Intro före bossmatch', manus: 'Warning. Boss fight is coming.' },
+    { key: 'lurvig-kanin', title: 'Efter varje match', manus: 'Vilken lurvig kanin, va?' },
+    { key: 'main-menu', title: 'Huvudmenyn', manus: 'Dangerous Fight, Slingshot Arena. Spela mot datorn, spela online, lagmatch två mot två till fyra mot fyra, poängtavla, samurai-dojo, svärdsvåg-butik, uppgraderingar, och hur spelar man.' },
+    { key: 'howto-screen', title: 'Hur spelar man?', manus: 'Riv motståndarens torn innan tiden, fyra minuter, tar slut. Ditt torn står längst ner.\n\nDasha: svep var som helst på skärmen åt det håll du vill åka.\n\nKrocka med motståndaren i fart för huggskada. Rammar du tornet gör du stor tornskada, men du tar trettio själv.\n\nStå stilla i din laddzon så laddas upp till tre energi. Tryck svärdsvåg för att skjuta. Dashar du in i ett fiendeskott parerar du det tillbaka.\n\nLavan i mitten bränner. Portarna i kanterna går bara åt ett håll: vänster uppåt, höger nedåt.\n\nDör du kommer du tillbaka efter tre sekunder.' },
+    { key: 'team-screen', title: 'Lagmatch', manus: 'Lagmatch. Välj hur många ni är i varje lag: två mot två, tre mot tre eller fyra mot fyra. Ju större lag, desto större spelplan. Ditt lag är antingen grönt eller rött.' },
+    { key: 'multiplayer-menu', title: 'Spela med kompis', manus: 'Spela med kompis. Skapa ett privat rum och dela koden, eller anslut med en kod du fått.' },
+    { key: 'weapons-menu', title: 'Samurai-dojo', manus: 'Samurai-dojo. Välj din krigare: Cyber Ronin, Armored Shogun eller Shadow Ninja. Lås upp med credits.' },
+    { key: 'cannons-menu', title: 'Svärdsvåg-butik', manus: 'Svärdsvåg-butik. Köp svärdsvågor till din samuraj. Du kan ha två aktiva samtidigt, och båda avfyras vid varje skott.' },
+    { key: 'upgrades-menu', title: 'Uppgraderingar', manus: 'Uppgraderingar. Förbättra ditt torns pansar, laddningen och hur många credits du får.' },
+    { key: 'scoreboard-screen', title: 'Poängtavla', manus: 'Poängtavla. Arenans bästa strider och statistik.' }
+];
+
+const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+let mic = null; // promise of the mic stream, shared so two quick taps open it once
+let active = null; // the recorder that is running right now
+
+function getMic() {
+    if (!mic) {
+        mic = navigator.mediaDevices.getUserMedia({
+            // keep the voice as it is: no auto gain pumping, no noise gate chopping words
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        }).catch((e) => { mic = null; throw e; });
+    }
+    return mic;
+}
+
+// Turn the mic off between recordings, so the browser does not keep listening
+function releaseMic() {
+    if (!mic) return;
+    mic.then((s) => s.getTracks().forEach((t) => t.stop()), () => {});
+    mic = null;
+}
+
+const list = document.getElementById('lines');
+LINES.forEach(line => {
+    const el = document.createElement('div');
+    el.className = 'line';
+    el.innerHTML = `<h2></h2><code></code><div class="manus"></div>
+        <div class="row">
+            <button class="rec">● Spela in</button>
+            <button class="play" disabled>▶ Lyssna</button>
+            <button class="save" disabled>⬇ Spara fil</button>
+            <span class="status"></span>
+        </div>`;
+    el.querySelector('h2').textContent = line.title;
+    el.querySelector('code').textContent = `assets/voice/${line.key}.${ext}`;
+    el.querySelector('.manus').textContent = line.manus;
+    const recBtn = el.querySelector('.rec');
+    const playBtn = el.querySelector('.play');
+    const saveBtn = el.querySelector('.save');
+    const status = el.querySelector('.status');
+    let blob = null;
+    let url = null;
+
+    recBtn.addEventListener('click', async () => {
+        if (active && active.line === line) { active.rec.stop(); return; }
+        let s;
+        try { s = await getMic(); } catch (e) {
+            const err = document.getElementById('mic-error');
+            err.hidden = false;
+            err.textContent = 'Kunde inte starta mikrofonen. Tillåt mikrofonen i webbläsaren och försök igen.';
+            return;
+        }
+        // a second tap while the mic was starting must not start a second recorder
+        if (active && active.line === line) return;
+        // only one recording at a time (it may already be stopping)
+        if (active && active.rec.state !== 'inactive') active.rec.stop();
+        const chunks = [];
+        const rec = new MediaRecorder(s, mime ? { mimeType: mime, audioBitsPerSecond: 128000 } : undefined);
+        rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+        rec.onstop = () => {
+            // the stop event comes later: another line may have started meanwhile
+            if (!active || active.rec === rec) { active = null; releaseMic(); }
+            recBtn.classList.remove('on');
+            recBtn.textContent = '● Spela in igen';
+            blob = new Blob(chunks, { type: rec.mimeType || mime });
+            if (url) URL.revokeObjectURL(url);
+            url = URL.createObjectURL(blob);
+            playBtn.disabled = saveBtn.disabled = false;
+            status.classList.remove('err');
+            status.textContent = 'Inspelad. Lyssna, och spara om du är nöjd.';
+        };
+        // Watch the level while recording: a peak at full scale is clipped for good
+        let clipped = 0;
+        let meter = null;
+        try {
+            const ctx = new AudioContext();
+            const an = ctx.createAnalyser();
+            an.fftSize = 2048;
+            ctx.createMediaStreamSource(s).connect(an);
+            const buf = new Float32Array(an.fftSize);
+            meter = setInterval(() => {
+                an.getFloatTimeDomainData(buf);
+                let peak = 0;
+                for (const v of buf) peak = Math.max(peak, Math.abs(v));
+                if (peak > 0.97) clipped++;
+                status.textContent = clipped ? 'För högt! Prata lite längre från mikrofonen.' : 'Spelar in…';
+                status.classList.toggle('err', clipped > 0);
+            }, 50);
+            rec.addEventListener('stop', () => { clearInterval(meter); ctx.close(); if (clipped) setTimeout(() => {
+                status.classList.add('err');
+                status.textContent = 'Det blev för högt och kan knastra. Spela gärna in igen lite längre från mikrofonen.';
+            }); });
+        } catch (e) {}
+        rec.start();
+        active = { line, rec };
+        recBtn.classList.add('on');
+        recBtn.textContent = '■ Stoppa';
+        status.textContent = 'Spelar in…';
+    });
+
+    playBtn.addEventListener('click', () => { if (url) new Audio(url).play(); });
+
+    saveBtn.addEventListener('click', () => {
+        if (!url) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${line.key}.${ext}`;
+        a.click();
+        el.classList.add('done');
+        status.textContent = `Sparad som ${line.key}.${ext}. Lägg den i assets/voice/.`;
+    });
+
+    list.appendChild(el);
+});
+</script>
+</body>
+</html>

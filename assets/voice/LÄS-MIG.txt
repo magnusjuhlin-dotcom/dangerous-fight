@@ -1,0 +1,2 @@
+Inspelade röstfiler hamnar här (skapa dem med voice-studio.html).
+Kör "node build.js" efteråt så kommer de med i Android-appen också.

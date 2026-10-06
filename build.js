@@ -2,14 +2,21 @@ const fs = require('fs');
 const path = require('path');
 
 const files = [
+    'src/i18n-en.js',
+    'src/i18n.js',
     'src/audio.js',
     'src/canvas.js',
     'src/particles.js',
     'src/upgrades.js',
+    'src/store.js',
+    'src/settings.js',
+    'src/missions.js',
+    'src/levels.js',
     'src/ui.js',
     'src/input.js',
     'src/player.js',
     'src/enemy.js',
+    'src/trailer.js',
     'src/game.js'
 ];
 
@@ -105,10 +112,8 @@ if (fs.existsSync(androidAssetsDir)) {
         if (!fs.existsSync(androidAssetsAssetsDir)) {
             fs.mkdirSync(androidAssetsAssetsDir, { recursive: true });
         }
-        const assetFiles = fs.readdirSync(assetsDir);
-        for (const file of assetFiles) {
-            fs.copyFileSync(path.join(assetsDir, file), path.join(androidAssetsAssetsDir, file));
-        }
+        // recursive, so subfolders like assets/voice/ (recorded lines) come along
+        fs.cpSync(assetsDir, androidAssetsAssetsDir, { recursive: true });
         console.log('Successfully copied assets/ directory to Android assets!');
     }
     
