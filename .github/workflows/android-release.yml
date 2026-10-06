@@ -1,4 +1,4 @@
-name: Build Android Release (APK & AAB) and upload to Google Play
+name: Build Android AAB and upload to Google Play
 
 on:
   push:
@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Android Release (APK & AAB)
+    name: Build AAB and upload to Google Play
     runs-on: ubuntu-latest
 
     env:
@@ -69,23 +69,24 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Validate signing secrets
+      - name: Validate signing and publishing secrets
         if: env.UPLOAD_TO_PLAY == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ANDROID_SERVICE_ACCOUNT_JSON: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
         run: |
           missing=0
-          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD ANDROID_SERVICE_ACCOUNT_JSON; do
             if [ -z "${!name}" ]; then
               echo "::error::Secret $name saknas! Lägg till det i GitHub repo Settings → Secrets."
               missing=1
             fi
           done
           if [ "$missing" = 1 ]; then exit 1; fi
-          echo "Alla secrets för signering hittades."
+          echo "Alla secrets för signering och publicering hittades."
 
       - name: Decode Signing Keystore
         env:
@@ -103,7 +104,7 @@ jobs:
             echo "No KEYSTORE_BASE64 secret provided (release builds will be unsigned)."
           fi
 
-      - name: Build APKs (Debug & Release) and AAB
+      - name: Build release AAB
         working-directory: android
         env:
           KEYSTORE_FILE: release.keystore
@@ -111,7 +112,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace
+          ./gradlew bundleRelease --stacktrace
 
       - name: Verify AAB signature
         id: aab
@@ -127,38 +128,6 @@ jobs:
             echo "AAB-signatur OK!"
           fi
           echo "aab_path=$AAB_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
-
-      - name: Upload Release APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-          retention-days: 30
-
-      - name: Upload Release AAB Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-release-aab
-          path: android/app/build/outputs/bundle/release/*.aab
-          retention-days: 30
-
-      # (checked only here, so the signed AAB above is always built and saved)
-      - name: Validate publishing secret
-        if: env.UPLOAD_TO_PLAY == 'true'
-        env:
-          SERVICE_ACCOUNT_JSON: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
-        run: |
-          if [ -z "$SERVICE_ACCOUNT_JSON" ]; then
-            echo "::error::Secret ANDROID_SERVICE_ACCOUNT_JSON saknas! Lägg till det i GitHub repo Settings → Secrets. (Den signerade AAB:n finns ändå under Artifacts.)"
-            exit 1
-          fi
 
       - name: Upload AAB to Google Play Console
         if: env.UPLOAD_TO_PLAY == 'true'

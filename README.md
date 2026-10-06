@@ -130,7 +130,7 @@ cd android && JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew 
 Första gången: godkänn "Tillåt USB-felsökning?" på telefonen (`adb devices` ska visa `device`, inte `unauthorized`).
 
 ### Release-APK/AAB
-GitHub-workflowen `.github/workflows/android-release.yml` bygger signerad release-APK och AAB vid varje push till `main` (eller manuellt via *Run workflow*) och laddar upp AAB:n till Google Play, spåret **internal** som standard. Vid manuell körning kan man välja spår (internal/alpha/beta/production) och status (`draft` behövs så länge appen aldrig har publicerats). Pull requests bygger bara. `versionCode` är workflowens körnummer, så varje uppladdning får ett högre nummer.
+GitHub-workflowen `.github/workflows/android-release.yml` bygger en signerad AAB vid varje push till `main` (eller manuellt via *Run workflow*) och laddar upp den till Google Play, spåret **internal** som standard. Inga APK-filer byggs och inget sparas som artefakt. Vid manuell körning kan man välja spår (internal/alpha/beta/production) och status (`draft` behövs så länge appen aldrig har publicerats). Pull requests bygger bara. `versionCode` är workflowens körnummer, så varje uppladdning får ett högre nummer.
 
 Secrets som behövs i repot: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` (uppladdningsnyckeln) och `ANDROID_SERVICE_ACCOUNT_JSON` (JSON-nyckeln för tjänstekontot `play-store-deployer@omega-clarity-504511-b8.iam.gserviceaccount.com`, som måste ha behörighet till appen `com.leanic.dangerousfight` i Play Console under *Användare och behörigheter*). Den allra första AAB:n för en ny app måste laddas upp för hand i Play Console; därefter sköter workflowen resten.
 
