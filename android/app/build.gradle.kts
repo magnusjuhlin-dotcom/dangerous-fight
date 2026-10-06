@@ -8,11 +8,15 @@ android {
     namespace = "com.noel.dangeroutfight"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.noel.dangeroutfight"
+        // the app id on Google Play (the Kotlin code keeps its com.noel.dangeroutfight package)
+        applicationId = "com.leanic.dangerousfight"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Google Play only takes updates that target a recent Android version
+        targetSdk = 36
+        // Every upload to Google Play needs a higher versionCode: the GitHub
+        // Action passes its run number in VERSION_CODE (local builds stay 1)
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+        versionName = "1.0.${System.getenv("VERSION_CODE") ?: "0"}"
     }
 
     signingConfigs {

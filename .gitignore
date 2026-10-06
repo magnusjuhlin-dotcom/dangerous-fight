@@ -37,3 +37,6 @@ node_modules/
 
 # Unused leftover (multiplayer runs over itty.ws, not PeerJS)
 peerjs.min.js
+
+# AAB downloaded for manual Play upload
+play-upload/

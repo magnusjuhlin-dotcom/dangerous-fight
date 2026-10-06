@@ -107,7 +107,7 @@ Skapar `src/bundle.js`, kopierar `index.html`, `style.css`, `src/` och `assets/`
 ### Samuraj-butik (köp Credits för riktiga pengar)
 Köpen går via Google Play Billing i Android-appen (`src/store.js` + `AndroidBilling` i `MainActivity.kt`). På webben och Xbox visas butiken, men den kan inte sälja något. För att öppna den behöver en vuxen:
 1. Skapa ett konto i [Google Play Console](https://play.google.com/console) (engångsavgift) och en betalningsprofil (bankuppgifter).
-2. Lägga upp appen (`com.noel.dangeroutfight`) med en signerad AAB, minst på ett internt testspår.
+2. Lägga upp appen (`com.leanic.dangerousfight`) med en signerad AAB, minst på ett internt testspår.
 3. Under *Monetisera → Produkter i appen* skapa engångsprodukter (förbrukningsbara) och aktivera dem: `credits_100` (10 kr), `credits_300` (30 kr), `credits_2100` (70 kr), och för Hjälpmedel-butiken `helper_shield_3` (10 kr), `helper_energy_5` (10 kr), `helper_rage_3` (15 kr), `helper_revive_5` (10 kr), `helper_mega` (39 kr), och för Fusk-butiken `cheat_god`, `cheat_tower`, `cheat_energy`, `cheat_damage`, `cheat_slow`, `cheat_speed`, `cheat_homing`, `cheat_rage`, `cheat_freeze`, `cheat_lava`, `cheat_credits` (20 kr styck) och `cheat_all` (99 kr). Fusket förbrukas aldrig – appen bekräftar (acknowledge) köpet så att det finns kvar för alltid, även om appen installeras om.
 4. Lägga till sig själv som licenstestare för att prova köp utan att betala på riktigt.
 
@@ -130,7 +130,9 @@ cd android && JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew 
 Första gången: godkänn "Tillåt USB-felsökning?" på telefonen (`adb devices` ska visa `device`, inte `unauthorized`).
 
 ### Release-APK/AAB
-GitHub-workflowen `.github/workflows/android-release.yml` bygger signerad release-APK och AAB vid varje push till `main` (eller manuellt via *Run workflow*). Artefakterna laddas ner från workflow-körningen.
+GitHub-workflowen `.github/workflows/android-release.yml` bygger signerad release-APK och AAB vid varje push till `main` (eller manuellt via *Run workflow*) och laddar upp AAB:n till Google Play, spåret **internal** som standard. Vid manuell körning kan man välja spår (internal/alpha/beta/production) och status (`draft` behövs så länge appen aldrig har publicerats). Pull requests bygger bara. `versionCode` är workflowens körnummer, så varje uppladdning får ett högre nummer.
+
+Secrets som behövs i repot: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` (uppladdningsnyckeln) och `ANDROID_SERVICE_ACCOUNT_JSON` (JSON-nyckeln för tjänstekontot `play-store-deployer@omega-clarity-504511-b8.iam.gserviceaccount.com`, som måste ha behörighet till appen `com.leanic.dangerousfight` i Play Console under *Användare och behörigheter*). Den allra första AAB:n för en ny app måste laddas upp för hand i Play Console; därefter sköter workflowen resten.
 
 ### Felsöka på telefonen
 WebView-debugging är på i appen. Öppna `chrome://inspect` i Chrome på datorn med telefonen ansluten för konsol och DevTools mot spelet. I konsolen finns spelobjektet som `game` (t.ex. `game.gameState`, `game.player.hp`).

@@ -1,16 +1,51 @@
-name: Build Android Release (APK & AAB)
+name: Build Android Release (APK & AAB) and upload to Google Play
 
 on:
   push:
     branches: [ "main", "master" ]
+    # Documentation changes do not need a new Play release
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch: # run by hand from the Actions tab
+    inputs:
+      track:
+        description: 'Google Play track (internal, alpha, beta, production)'
+        required: false
+        default: 'internal'
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+      status:
+        description: 'Release status (draft is needed while the app has never been published)'
+        required: false
+        default: 'completed'
+        type: choice
+        options:
+          - completed
+          - draft
+
+# Google Play allows only one open "edit" per app: two uploads at the same
+# time make one of them fail with "This edit has expired". Run one at a time;
+# a waiting run is replaced by the next push, a running one is never cancelled.
+concurrency:
+  group: android-play-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build Android Release (APK & AAB)
     runs-on: ubuntu-latest
+
+    env:
+      # Every upload to Google Play needs a higher versionCode (build.gradle.kts reads it)
+      VERSION_CODE: ${{ github.run_number }}
+      # Pull requests only build; pushes to main and manual runs also upload
+      UPLOAD_TO_PLAY: ${{ github.event_name != 'pull_request' }}
 
     steps:
       - name: Checkout repository
@@ -34,16 +69,38 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Decode Signing Keystore (Optional)
+      - name: Validate signing secrets
+        if: env.UPLOAD_TO_PLAY == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name saknas! Lägg till det i GitHub repo Settings → Secrets."
+              missing=1
+            fi
+          done
+          if [ "$missing" = 1 ]; then exit 1; fi
+          echo "Alla secrets för signering hittades."
+
+      - name: Decode Signing Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
-            echo "Keystore decoded. File size:"
-            ls -la android/app/release.keystore
+            FILE_SIZE=$(wc -c < android/app/release.keystore)
+            echo "Keystore-filstorlek: $FILE_SIZE bytes"
+            if [ "$FILE_SIZE" -lt 100 ]; then
+              echo "::error::Keystorefilen är ogiltig eller tom. Kontrollera att KEYSTORE_BASE64 är korrekt."
+              exit 1
+            fi
           else
-            echo "No KEYSTORE_BASE64 secret provided."
+            echo "No KEYSTORE_BASE64 secret provided (release builds will be unsigned)."
           fi
 
       - name: Build APKs (Debug & Release) and AAB
@@ -55,6 +112,21 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace
+
+      - name: Verify AAB signature
+        id: aab
+        run: |
+          AAB_PATH=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -1)
+          if [ -z "$AAB_PATH" ]; then
+            echo "::error::Ingen AAB-fil hittades!"
+            exit 1
+          fi
+          echo "Hittade AAB: $AAB_PATH (versionCode $VERSION_CODE)"
+          if [ "$UPLOAD_TO_PLAY" = "true" ]; then
+            jarsigner -verify "$AAB_PATH" || { echo "::error::AAB-signaturen är ogiltig!"; exit 1; }
+            echo "AAB-signatur OK!"
+          fi
+          echo "aab_path=$AAB_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -76,3 +148,24 @@ jobs:
           name: android-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
           retention-days: 30
+
+      # (checked only here, so the signed AAB above is always built and saved)
+      - name: Validate publishing secret
+        if: env.UPLOAD_TO_PLAY == 'true'
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::Secret ANDROID_SERVICE_ACCOUNT_JSON saknas! Lägg till det i GitHub repo Settings → Secrets. (Den signerade AAB:n finns ändå under Artifacts.)"
+            exit 1
+          fi
+
+      - name: Upload AAB to Google Play Console
+        if: env.UPLOAD_TO_PLAY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+          packageName: com.leanic.dangerousfight
+          releaseFiles: ${{ steps.aab.outputs.aab_path }}
+          tracks: ${{ inputs.track || 'internal' }}
+          status: ${{ inputs.status || 'completed' }}
