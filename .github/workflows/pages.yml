@@ -36,7 +36,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p dist/src
-          cp index.html style.css dist/
+          cp index.html style.css privacy.html dist/
           cp -r src/* dist/src/
           if [ -d assets ]; then cp -r assets dist/assets; fi
           touch dist/.nojekyll

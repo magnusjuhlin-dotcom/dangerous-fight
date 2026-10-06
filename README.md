@@ -134,6 +134,12 @@ GitHub-workflowen `.github/workflows/android-release.yml` bygger en signerad AAB
 
 Secrets som behövs i repot: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` (uppladdningsnyckeln) och `ANDROID_SERVICE_ACCOUNT_JSON` (JSON-nyckeln för tjänstekontot `play-store-deployer@omega-clarity-504511-b8.iam.gserviceaccount.com`, som måste ha behörighet till appen `com.leanic.dangerousfight` i Play Console under *Användare och behörigheter*). Den allra första AAB:n för en ny app måste laddas upp för hand i Play Console; därefter sköter workflowen resten.
 
+### Butikssidan på Google Play
+Texter och bilder till *Standardbutiksuppgifter* ligger i `fastlane/metadata/android/` – `sv-SE/` och `en-US/` med `title.txt` (max 30 tecken), `short_description.txt` (max 80), `full_description.txt` (max 4000) och `images/` (`icon.png` 512×512, `featureGraphic.png` 1024×500 och `phoneScreenshots/` 1080×1920). Skärmbilderna är tagna ur spelet i telefonformat.
+
+### Integritetspolicy
+`privacy.html` (svenska och engelska) publiceras med GitHub Pages på https://magnusjuhlin-dotcom.github.io/dangerous-fight/privacy.html – den adressen anges i Play Console under *Appens innehåll → Integritetspolicy*. Uppdatera sidan om spelet börjar samla in eller dela nya uppgifter.
+
 ### Felsöka på telefonen
 WebView-debugging är på i appen. Öppna `chrome://inspect` i Chrome på datorn med telefonen ansluten för konsol och DevTools mot spelet. I konsolen finns spelobjektet som `game` (t.ex. `game.gameState`, `game.player.hp`).
 

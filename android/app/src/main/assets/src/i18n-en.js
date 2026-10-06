@@ -154,7 +154,7 @@ export const EN_EXACT = {
     'TIDEN UTE!': "TIME'S UP!",
 
     // ---- Main menu ----
-    'SPELA MOT DATORN': 'VS COMPUTER',
+    'SPELA MOT DATORN': 'VS CPU',
     'SPELA ONLINE': 'PLAY ONLINE',
     'LAGMATCH 2v2 - 4v4': 'TEAM MATCH 2v2 - 4v4',
     'POÄNGTAVLA 🏆': 'SCORE­BOARD 🏆',

@@ -1094,6 +1094,8 @@ h2 {
     gap: 4px;
     backdrop-filter: blur(5px);
 }
+/* the enemy's box on the enemy's (top) half, mine on my (bottom) half */
+.top-car-stat { order: -1; }
 
 .mini-label {
     font-family: var(--font-cyber);
